@@ -9,3 +9,5 @@ processed_pdfs_log/*
 chroma_db/*
 !chroma_db/.gitkeep
 gpt_token.txt
+chat_history.json
+.DS_Store
