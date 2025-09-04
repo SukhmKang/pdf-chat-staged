@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Chat Interface</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- PDF.js for PDF rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js?v=2"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css?v=2">
+    
+    <!-- Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    
+    <style>
+        .chat-message {
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .pdf-container {
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
+        }
+        
+        .chat-container {
+            height: calc(100vh - 60px);
+        }
+        
+        .spinner {
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3498db;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Enhanced PDF.js text layer styles for proper text selection */
+        .textLayer {
+            position: absolute;
+            left: 0;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            overflow: hidden;
+            opacity: 0.2;
+            line-height: 1.0;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
+        }
+        
+        .textLayer > span,
+        .textLayer > div {
+            color: transparent;
+            position: absolute;
+            white-space: pre;
+            cursor: text;
+            transform-origin: 0% 0%;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
+            pointer-events: auto;
+            font-family: sans-serif;
+        }
+        
+        .textLayer ::selection {
+            background: rgba(0, 123, 255, 0.3);
+        }
+        
+        .textLayer ::-moz-selection {
+            background: rgba(0, 123, 255, 0.3);
+        }
+        
+        /* Smooth scrolling for PDF container */
+        .pdf-container {
+            scroll-behavior: smooth;
+        }
+        
+        /* Enhanced PDF viewer styling */
+        .pdf-viewer-container {
+            background: #f8f9fa;
+            border-radius: 8px;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .pdf-page {
+            margin: 20px auto;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            border-radius: 4px;
+            overflow: hidden;
+            background: white;
+            position: relative;
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
+        }
+        
+        .pdf-page canvas {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+        
+        /* PDF toolbar improvements */
+        .pdf-toolbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .pdf-toolbar button {
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            transition: all 0.2s ease;
+        }
+        
+        .pdf-toolbar button:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-1px);
+        }
+        
+        .pdf-toolbar button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        /* PDF list styling for long titles */
+        #pdfList > div {
+            min-height: 60px;
+            width: 100%;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+        
+        #pdfList .truncate {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            display: block;
+        }
+        
+        /* Ensure consistent card sizes */
+        #pdfList {
+            width: 100%;
+        }
+        
+        /* PDF title truncation in header */
+        #pdfTitle {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        /* Citation tags styling */
+        .citation-tag {
+            display: inline-flex;
+            align-items: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-size: 0.75rem;
+            font-weight: 500;
+            padding: 2px 8px;
+            border-radius: 12px;
+            margin: 0 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+            text-decoration: none;
+        }
+        
+        .citation-tag:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+        }
+        
+        .citation-tag i {
+            margin-right: 4px;
+            font-size: 0.7rem;
+        }
+        
+        .citation-tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            font-size: 0.75rem;
+            padding: 6px 10px;
+            border-radius: 6px;
+            white-space: nowrap;
+            z-index: 1000;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(-5px);
+            transition: all 0.2s ease;
+        }
+        
+        .citation-tag:hover .citation-tooltip {
+            opacity: 1;
+            transform: translateY(-25px);
+        }
+        
+        /* Chunk highlighting styles */
+        .chunk-highlight {
+            background: rgba(255, 235, 59, 0.7) !important;
+            color: transparent !important; /* Keep text invisible to avoid scaling issues */
+            border-radius: 3px;
+            box-shadow: 0 1px 3px rgba(255, 193, 7, 0.5);
+            transition: all 0.3s ease;
+            animation: pulse-highlight 2s ease-in-out;
+        }
+        
+        @keyframes pulse-highlight {
+            0% { 
+                background: rgba(255, 235, 59, 1);
+                transform: scale(1);
+            }
+            50% { 
+                background: rgba(255, 235, 59, 0.9);
+                transform: scale(1.02);
+            }
+            100% { 
+                background: rgba(255, 235, 59, 0.8);
+                transform: scale(1);
+            }
+        }
+        
+        .chunk-highlight-fade {
+            background: rgba(255, 235, 59, 0.4) !important;
+            transition: all 1s ease-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="app" class="flex h-screen">
+        <!-- Sidebar -->
+        <div class="w-1/4 bg-white shadow-lg border-r border-gray-200 flex-shrink-0 min-w-0">
+            <!-- Collection Selection -->
+            <div class="p-4 border-b border-gray-200">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Collection</label>
+                <select id="collectionSelect" class="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">Select a collection...</option>
+                </select>
+            </div>
+            
+            <!-- Model Selection -->
+            <div class="p-4 border-b border-gray-200">
+                <label class="block text-sm font-medium text-gray-700 mb-2">AI Model</label>
+                <select id="modelSelect" class="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="gpt-5">GPT-5</option>
+                    <option value="gpt-4o">GPT-4 Omni</option>
+                </select>
+            </div>
+            
+            <!-- PDF List -->
+            <div class="p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-medium text-gray-700">PDFs</label>
+                    <button id="backToCollection" class="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded text-gray-600" style="display: none;" title="Chat with entire collection">
+                        <i class="fas fa-arrow-left mr-1"></i> Collection
+                    </button>
+                </div>
+                <div id="pdfList" class="space-y-2 max-h-60 overflow-y-auto">
+                    <div class="text-gray-500 text-sm">Select a collection first</div>
+                </div>
+            </div>
+            
+            <!-- TOC Sections -->
+            <div class="p-4 border-t border-gray-200">
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-medium text-gray-700">TOC Sections</label>
+                    <div class="relative group">
+                        <div class="text-xs text-gray-500 hover:text-gray-700 cursor-help">
+                            <i class="fas fa-info-circle"></i> Multi-select
+                        </div>
+                        <div class="absolute right-0 top-6 bg-gray-800 text-white text-xs rounded px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-10">
+                            <i class="fas fa-mouse-pointer mr-1"></i>
+                            Click: single section | Ctrl/Cmd+click: multiple
+                        </div>
+                    </div>
+                </div>
+                <div id="tocList" class="space-y-1 max-h-40 overflow-y-auto">
+                    <div class="text-gray-500 text-sm">Select a PDF first</div>
+                </div>
+            </div>
+            
+            <!-- Chat Mode Indicator -->
+            <div class="p-4 border-t border-gray-200">
+                <div id="chatModeIndicator" class="bg-blue-50 p-3 rounded-lg">
+                    <div class="text-sm font-medium text-blue-800">Collection Mode</div>
+                    <div class="text-xs text-blue-600">Chatting with entire collection</div>
+                    <div class="text-xs text-blue-500 mt-1" id="selectedModel">Using GPT-5</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Main Content Area -->
+        <div class="flex-1 flex">
+            <!-- PDF Viewer -->
+            <div class="w-1/2 bg-white border-r border-gray-200">
+                <div class="h-full flex flex-col">
+                    <!-- PDF Header -->
+                    <div class="pdf-toolbar p-4 border-b border-gray-200">
+                        <div class="flex items-center justify-between">
+                            <div id="pdfTitle" class="font-medium text-white">No PDF Selected</div>
+                            <div id="pdfControls" class="flex items-center space-x-2" style="display: none;">
+                                <span id="pageInfo" class="text-sm px-2">Page 1 of 1</span>
+                                <div class="w-px h-6 bg-white bg-opacity-30 mx-2"></div>
+                                <button id="zoomOut" class="px-3 py-1 rounded hover:bg-gray-300">
+                                    <i class="fas fa-search-minus"></i>
+                                </button>
+                                <span id="zoomLevel" class="text-sm px-2">120%</span>
+                                <button id="zoomIn" class="px-3 py-1 rounded hover:bg-gray-300">
+                                    <i class="fas fa-search-plus"></i>
+                                </button>
+                                <button id="fitWidth" class="px-3 py-1 rounded hover:bg-gray-300 text-sm">
+                                    Fit Width
+                                </button>
+                                <button id="scrollToTop" class="px-3 py-1 rounded hover:bg-gray-300 text-sm">
+                                    <i class="fas fa-arrow-up"></i> Top
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- PDF Content -->
+                    <div class="flex-1 pdf-container pdf-viewer-container">
+                        <div id="pdfContainer" class="flex items-center justify-center h-full">
+                            <div class="text-center text-gray-500">
+                                <i class="fas fa-file-pdf text-6xl mb-4 opacity-50"></i>
+                                <p>Select a PDF to view</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Chat Interface -->
+            <div class="w-1/2 flex flex-col bg-white">
+                <!-- Chat Header -->
+                <div class="p-4 border-b border-gray-200 bg-gray-50">
+                    <div class="flex items-center justify-between">
+                        <h2 class="font-medium text-gray-800">Chat</h2>
+                        <div class="flex items-center space-x-2">
+                            <button id="clearChat" class="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200">
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Chat Messages -->
+                <div class="flex-1 overflow-y-auto p-4 space-y-6 chat-container">
+                    <div id="chatMessages">
+                        <div class="chat-message bg-blue-50 p-3 rounded-lg mb-6">
+                            <div id="timeBasedGreeting" class="text-sm text-blue-800 font-medium">Welcome to PDF Chat!</div>
+                            <div class="text-sm text-blue-600 mt-1">Select a collection and start asking questions about your PDFs.</div>
+                        </div>
+                    </div>
+                    <div id="typingIndicator" class="hidden">
+                        <div class="flex items-center space-x-2">
+                            <div class="spinner"></div>
+                            <span class="text-sm text-gray-500">AI is thinking...</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Chat Input -->
+                <div class="p-4 border-t border-gray-200">
+                    <div class="flex space-x-2">
+                        <input 
+                            type="text" 
+                            id="chatInput" 
+                            placeholder="Ask a question about your PDFs..." 
+                            class="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                        <button 
+                            id="sendButton" 
+                            class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/app.js?v=33"></script>
+</body>
+</html>

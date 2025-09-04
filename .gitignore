@@ -1,0 +1,11 @@
+__pycache__/
+venv39/
+pdfs/*
+!pdfs/.gitkeep
+processed_output/*
+!processed_output/.gitkeep
+processed_pdfs_log/*
+!processed_pdfs_log/.gitkeep
+chroma_db/*
+!chroma_db/.gitkeep
+gpt_token.txt
