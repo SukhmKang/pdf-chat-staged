@@ -1241,7 +1241,7 @@ NY
     
     clearChat() {
         this.chatMessages.innerHTML = `
-            <div class="chat-message bg-blue-50 p-3 rounded-lg">
+            <div class="chat-message bg-blue-50 p-3 rounded-lg mb-6">
                 <div class="text-sm text-blue-800 font-medium">Chat cleared!</div>
                 <div class="text-sm text-blue-600 mt-1">Start a new conversation.</div>
             </div>
