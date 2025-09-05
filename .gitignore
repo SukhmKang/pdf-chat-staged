@@ -11,3 +11,4 @@ chroma_db/*
 gpt_token.txt
 chat_history.json
 .DS_Store
+anthropic_token.txt

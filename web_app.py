@@ -58,6 +58,7 @@ class ChatMessage(BaseModel):
     toc_section: Optional[str] = None  # Keep for backward compatibility
     page_range: Optional[str] = None
     model: Optional[str] = "gpt-5"
+    verbosity: Optional[str] = "medium"
 
 class ChatResponse(BaseModel):
     response: str
@@ -286,8 +287,17 @@ async def chat_endpoint(chat_request: ChatMessage):
         
         session = chat_sessions[session_key]
         
-        # Set chat mode based on request
-        if chat_request.pdf_filename and (chat_request.toc_sections or chat_request.toc_section):
+        # Set chat mode based on request (order matters - most specific first)
+        if chat_request.page_range and chat_request.pdf_filename:
+            # Parse page range (assuming format like "1-10")
+            try:
+                start_page, end_page = map(int, chat_request.page_range.split("-"))
+                session.set_chat_mode("page_range", 
+                                    pdf_filename=chat_request.pdf_filename,
+                                    page_range=(start_page, end_page))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid page range format")
+        elif chat_request.pdf_filename and (chat_request.toc_sections or chat_request.toc_section):
             # Handle multiple TOC sections or single section (for backward compatibility)
             toc_sections = chat_request.toc_sections or [chat_request.toc_section]
             session.set_chat_mode("toc_section", 
@@ -295,21 +305,11 @@ async def chat_endpoint(chat_request: ChatMessage):
                                 toc_sections=toc_sections)
         elif chat_request.pdf_filename:
             session.set_chat_mode("pdf", pdf_filename=chat_request.pdf_filename)
-        elif chat_request.page_range:
-            # Parse page range (assuming format like "1-10")
-            try:
-                start_page, end_page = map(int, chat_request.page_range.split("-"))
-                session.set_chat_mode("page_range", 
-                                    pdf_filename=chat_request.pdf_filename,
-                                    start_page=start_page, 
-                                    end_page=end_page)
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid page range format")
         else:
             session.set_chat_mode("collection")
         
         # Process the chat message
-        response_text = session.ask_question(chat_request.message, model=chat_request.model)
+        response_text = session.ask_question(chat_request.message, model=chat_request.model, verbosity=chat_request.verbosity)
         
         # Get context info for the response
         context_info = {

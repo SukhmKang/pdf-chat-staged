@@ -56,13 +56,14 @@ import sys
 # Import our pipeline components
 from query_collection import CollectionQueryTool
 from openai import OpenAI
+import anthropic
 import fitz  # PyMuPDF for image extraction
 
 
 class PDFChatSession:
     def __init__(self, collection_name: str, vector_store_dir: str = "./chroma_db",
                  gpt_token_path: str = "gpt_token.txt", history_file: str = "chat_history.json",
-                 enhanced_mode: bool = False):
+                 enhanced_mode: bool = False, anthropic_token_path : str = "anthropic_token.txt"):
         """
         Initialize comprehensive PDF chat session.
         
@@ -107,6 +108,14 @@ class PDFChatSession:
             with open(gpt_token_path, 'r') as f:
                 api_key = f.readline().strip()
             self.openai_client = OpenAI(api_key=api_key)
+        except Exception as e:
+            print(f"Error initializing OpenAI client: {e}")
+            sys.exit(1)
+
+        try:
+            with open(anthropic_token_path, 'r') as f:
+                api_key = f.readline().strip()
+            self.anthropic_client = anthropic.Anthropic(api_key=api_key)
         except Exception as e:
             print(f"Error initializing OpenAI client: {e}")
             sys.exit(1)
@@ -649,51 +658,175 @@ Please provide a helpful response based on the retrieved content and our convers
     
     def _generate_dual_answers_parallel(self, question: str, model: str = "gpt-5") -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
-        Generate two answers in parallel: one with auto-TOC routing and one without.
+        Generate two answers in parallel with mode-specific logic:
+        - TOC mode: parent chunks vs child chunks within TOC section
+        - Page range mode: parent chunks vs child chunks within page range  
+        - Other modes: auto-TOC routing vs no auto-TOC routing
         
         Args:
             question: User's question
             model: Model to use for generation
             
         Returns:
-            Tuple of (toc_answer_data, non_toc_answer_data) dictionaries
+            Tuple of (answer1_data, answer2_data) dictionaries
         """
         import concurrent.futures
         
         corrected_question = self._fix_typos(question)
         n_results = 8  # Standard mode default
+        current_mode = self.current_context["mode"]
         
-        print(f"\n🔄 Generating dual answers in parallel: AUTO-TOC vs NO-TOC...")
-        
-        def generate_toc_answer():
-            print(f"📊 Thread 1: Auto-TOC routing enabled...")
-            toc_chunks = self._retrieve_relevant_chunks_with_setting(
-                corrected_question, n_results, use_auto_toc=True
-            )
-            return self._generate_single_answer_standard(
-                corrected_question, toc_chunks, model, "AUTO-TOC"
-            )
-        
-        def generate_non_toc_answer():
-            print(f"📄 Thread 2: Auto-TOC routing disabled...")
-            non_toc_chunks = self._retrieve_relevant_chunks_with_setting(
-                corrected_question, n_results, use_auto_toc=False
-            )
-            return self._generate_single_answer_standard(
-                corrected_question, non_toc_chunks, model, "NO-TOC"
-            )
-        
-        # Execute both answer generations in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            toc_future = executor.submit(generate_toc_answer)
-            non_toc_future = executor.submit(generate_non_toc_answer)
+        if current_mode == "toc_section":
+            print(f"\n🔄 TOC Mode: Generating dual answers with parent vs child chunks...")
             
-            # Wait for both to complete
-            toc_answer_data = toc_future.result()
-            non_toc_answer_data = non_toc_future.result()
+            def generate_parent_answer():
+                print(f"📊 Thread 1: Using parent chunks within TOC section...")
+                parent_chunks = self._retrieve_chunks_by_type(
+                    corrected_question, n_results, chunk_type="parent"
+                )
+                return self._generate_single_answer_standard(
+                    corrected_question, parent_chunks, model, "PARENT-CHUNKS"
+                )
+            
+            def generate_child_answer():
+                print(f"📄 Thread 2: Using child chunks within TOC section...")
+                child_chunks = self._retrieve_chunks_by_type(
+                    corrected_question, n_results, chunk_type="child"
+                )
+                return self._generate_single_answer_standard(
+                    corrected_question, child_chunks, model, "CHILD-CHUNKS"
+                )
+            
+            # Execute both answer generations in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                parent_future = executor.submit(generate_parent_answer)
+                child_future = executor.submit(generate_child_answer)
+                
+                parent_answer_data = parent_future.result()
+                child_answer_data = child_future.result()
+            
+            print(f"✅ TOC mode parallel generation complete")
+            return parent_answer_data, child_answer_data
+            
+        elif current_mode == "page_range":
+            print(f"\n🔄 Page Range Mode: Generating dual answers with parent vs child chunks...")
+            
+            def generate_parent_answer():
+                print(f"📊 Thread 1: Using parent chunks within page range...")
+                parent_chunks = self._retrieve_chunks_by_type(
+                    corrected_question, n_results, chunk_type="parent"
+                )
+                return self._generate_single_answer_standard(
+                    corrected_question, parent_chunks, model, "PARENT-CHUNKS"
+                )
+            
+            def generate_child_answer():
+                print(f"📄 Thread 2: Using child chunks within page range...")
+                child_chunks = self._retrieve_chunks_by_type(
+                    corrected_question, n_results, chunk_type="child"
+                )
+                return self._generate_single_answer_standard(
+                    corrected_question, child_chunks, model, "CHILD-CHUNKS"
+                )
+            
+            # Execute both answer generations in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                parent_future = executor.submit(generate_parent_answer)
+                child_future = executor.submit(generate_child_answer)
+                
+                parent_answer_data = parent_future.result()
+                child_answer_data = child_future.result()
+            
+            print(f"✅ Page range mode parallel generation complete")
+            return parent_answer_data, child_answer_data
+            
+        else:
+            # Original logic for other modes (collection, pdf, group)
+            print(f"\n🔄 {current_mode.upper()} Mode: Generating dual answers with AUTO-TOC vs NO-TOC...")
+            
+            def generate_toc_answer():
+                print(f"📊 Thread 1: Auto-TOC routing enabled...")
+                toc_chunks = self._retrieve_relevant_chunks_with_setting(
+                    corrected_question, n_results, use_auto_toc=True
+                )
+                return self._generate_single_answer_standard(
+                    corrected_question, toc_chunks, model, "AUTO-TOC"
+                )
+            
+            def generate_non_toc_answer():
+                print(f"📄 Thread 2: Auto-TOC routing disabled...")
+                non_toc_chunks = self._retrieve_relevant_chunks_with_setting(
+                    corrected_question, n_results, use_auto_toc=False
+                )
+                return self._generate_single_answer_standard(
+                    corrected_question, non_toc_chunks, model, "NO-TOC"
+                )
+            
+            # Execute both answer generations in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                toc_future = executor.submit(generate_toc_answer)
+                non_toc_future = executor.submit(generate_non_toc_answer)
+                
+                toc_answer_data = toc_future.result()
+                non_toc_answer_data = non_toc_future.result()
+            
+            print(f"✅ {current_mode.upper()} mode parallel generation complete")
+            return toc_answer_data, non_toc_answer_data
+    
+    def _retrieve_chunks_by_type(self, question: str, n_results: int, chunk_type: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve chunks of a specific type within the current context mode.
         
-        print(f"✅ Parallel generation complete")
-        return toc_answer_data, non_toc_answer_data
+        Args:
+            question: User's question
+            n_results: Number of results to return
+            chunk_type: "parent" or "child"
+            
+        Returns:
+            List of chunk dictionaries
+        """
+        try:
+            current_mode = self.current_context["mode"]
+            
+            if current_mode == "toc_section":
+                # Query within TOC section with specific chunk type
+                results = self.query_tool.query_by_toc_section(
+                    query=question,
+                    toc_sections=self.current_context["toc_sections"],
+                    pdf_filenames=self.current_context.get("pdf_filenames"),
+                    n_results=n_results,
+                    chunk_type=chunk_type,
+                    use_hyde=True
+                )
+                
+            elif current_mode == "page_range":
+                # Query within page range with specific chunk type
+                pdf_filename = self.current_context["pdf_filenames"][0] if self.current_context.get("pdf_filenames") else None
+                page_range = self.current_context.get("page_range", (1, 10))  # Default fallback
+                
+                results = self.query_tool.query_by_page_range(
+                    query=question,
+                    pdf_filename=pdf_filename,
+                    start_page=page_range[0],
+                    end_page=page_range[1],
+                    n_results=n_results,
+                    chunk_type=chunk_type,
+                    use_hyde=False  # Keep consistent with existing page range logic
+                )
+                
+            else:
+                # Fallback to regular retrieval for other modes
+                print(f"Warning: _retrieve_chunks_by_type called for unsupported mode: {current_mode}")
+                return self._retrieve_relevant_chunks_with_setting(question, n_results, use_auto_toc=True)
+            
+            # Extract and return the results
+            chunks = results.get("results", [])
+            print(f"📊 Retrieved {len(chunks)} {chunk_type} chunks for {current_mode} mode")
+            return chunks
+            
+        except Exception as e:
+            print(f"❌ Error retrieving {chunk_type} chunks: {e}")
+            return []
     
     def _retrieve_relevant_chunks_with_setting(self, question: str, n_results: int, use_auto_toc: bool) -> List[Dict[str, Any]]:
         """Retrieve relevant chunks with specific auto-TOC setting."""
@@ -809,7 +942,7 @@ Please provide a helpful response based on the retrieved content and our convers
             
             # Generate response
             response = self._make_chat_completion(model, messages, self.max_response_tokens)
-            assistant_response_raw = response.choices[0].message.content.strip()
+            assistant_response_raw = response
             
             # Parse JSON response
             try:
@@ -843,40 +976,40 @@ Please provide a helpful response based on the retrieved content and our convers
             }
     
     def _synthesize_answers(self, toc_answer_data: Dict[str, Any], non_toc_answer_data: Dict[str, Any], 
-                           question: str, model: str = "gpt-4o") -> Tuple[str, Dict[str, Any]]:
+                           question: str, model: str = "gpt-4o", verbosity: str = "medium") -> Tuple[str, Dict[str, Any]]:
         """
         Use GPT-4o to synthesize the best aspects of both answers.
         """
         print(f"🧠 Synthesizing best aspects from both approaches...")
         
-        synthesis_prompt = f"""You are an expert at synthesizing information from multiple sources to create the best possible answer.
+        synthesis_prompt = f"""You have been given the same question answered using two different document retrieval approaches:
 
-You have been given the same question answered using two different document retrieval approaches:
-
-APPROACH 1 - AUTO-TOC ROUTING:
-This approach used automatic table-of-contents detection to focus on specific sections that seemed most relevant to the query.
+APPROACH 1:
 Confidence: {toc_answer_data['confidence']}
 Chunks found: {len(toc_answer_data['chunks'])}
 
-APPROACH 2 - BROAD SEARCH: 
-This approach searched across the entire document collection without section-specific filtering.
+APPROACH 2:
 Confidence: {non_toc_answer_data['confidence']}
 Chunks found: {len(non_toc_answer_data['chunks'])}
 
+VERBOSITY LEVEL: {verbosity.upper()}
+- High: Provide comprehensive, detailed explanations with extensive background context
+- Medium: Provide balanced explanations with moderate detail and context  
+- Low: Provide concise, direct answers focused on essential information only
+
 YOUR TASK:
 Create a synthesized answer that combines the best aspects of both approaches. Your response should:
-1. Include the most relevant and accurate information from both responses
-2. Maintain all citation tags in the exact format: <citation pdf_name="filename.pdf" page_number="123" chunk_id="chunk_identifier" cited_text="Insert text here...">
-3. Resolve any contradictions by favoring the more specific/detailed information
-4. Ensure completeness - don't miss important points from either response
-5. Create a coherent, well-structured answer
+1. Use proper markdown formatting (headers, lists, bold, italic, code blocks, etc.) to structure your answer clearly. If the original answers don't use markdown formatting, add it in.
+2. Include the most relevant and accurate information from both responses  
+3. Maintain all citation tags in the exact format: <citation pdf_name="filename.pdf" page_number="123" chunk_id="chunk_identifier" cited_text="Insert text here...">
+4. Adjust the length and detail level according to the {verbosity} verbosity setting above
 
 ORIGINAL QUESTION: {question}
 
-AUTO-TOC RESPONSE:
+APPROACH 1:
 {toc_answer_data['response']}
 
-BROAD SEARCH RESPONSE: 
+APPROACH 2:
 {non_toc_answer_data['response']}
 
 Provide your synthesized response in JSON format:
@@ -884,13 +1017,13 @@ Provide your synthesized response in JSON format:
   "synthesis_rationale": "Brief explanation of how you combined the responses",
   "synthesized_response": "Your combined response with all citation tags preserved",
   "confidence": "high/medium/low",
-  "primary_source": "auto_toc/broad_search/balanced" 
+  "primary_source": "approach_1/approach_2/balanced" 
 }}"""
 
         try:
             # Use the specified model for synthesis
-            response = self._make_chat_completion(model, [{"role": "user", "content": synthesis_prompt}], 4000)
-            synthesis_result = response.choices[0].message.content.strip()
+            response = self._make_chat_completion(model, [{"role": "user", "content": synthesis_prompt}], 10000)
+            synthesis_result = response
             
             # Parse the synthesis response
             try:
@@ -951,7 +1084,7 @@ Provide your synthesized response in JSON format:
         Make a chat completion request with model-specific parameters.
         
         Args:
-            model: Model name ("gpt-5" or "gpt-4o")
+            model: Model name ("gpt-5" or "gpt-4o" or "claude")
             messages: List of message dictionaries
             max_tokens: Maximum tokens for response
             
@@ -961,25 +1094,76 @@ Provide your synthesized response in JSON format:
 
         if model == "gpt-5":
             # GPT-5 uses max_completion_tokens and doesn't support temperature
-            max_tokens = 4000
+            max_tokens = 15000
             return self.openai_client.chat.completions.create(
                 model="gpt-5",
                 messages=messages,
                 max_completion_tokens=max_tokens,
                 response_format={"type": "json_object"}
-            )
-        else:
+            ).choices[0].message.content.strip()
+        elif "gpt-4" in model:
             # GPT-4 and other models use max_tokens and support temperature
-            max_tokens = 4000
+            max_tokens = 10000
             return self.openai_client.chat.completions.create(
-                model=model if model != "gpt-4o" else "gpt-4o",
+                model="gpt-4o",
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=0.7,
                 response_format={"type": "json_object"}
-            )
+            ).choices[0].message.content.strip()
+        else:
+            max_tokens = 10000
+            # Claude doesn't support response_format, so we need to handle JSON parsing manually
+            for attempt in range(3):  # Try up to 3 times
+                try:
+                    response_text = self.anthropic_client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=max_tokens,
+                        messages=messages
+                    ).content[0].text
+                    
+                    # Clean up Claude's response (remove backticks, backslashes, and trim whitespace)
+                    response_text = response_text.strip()
+                    
+                    if response_text.startswith('```json') and response_text.endswith('```'):
+                        response_text = response_text[7:-3].strip()
+                    elif response_text.startswith('```') and response_text.endswith('```'):
+                        response_text = response_text[3:-3].strip()
+                    elif response_text.startswith('`') and response_text.endswith('`'):
+                        response_text = response_text[1:-1].strip()
+                    elif response_text.startswith("json"):
+                        response_text = response_text[4:].strip()
+                    
+                    # Remove trailing backslashes and whitespace that Claude sometimes adds
+                    # Handle patterns like "}\\\\" or "}\\\n\\" 
+                    import re
+                    response_text = re.sub(r'[\\\s]*$', '', response_text).strip()
+                    
+                    # Try to parse as JSON to validate format
+                    json.loads(response_text)
+                    return response_text
+                    
+                except json.JSONDecodeError:
+                    if attempt == 2:  # Last attempt
+                        print(f"⚠️  Claude response parsing failed after 3 attempts")
+                        # Return the raw response on final failure
+                        return response_text
+                    else:
+                        print(f"⚠️  Claude JSON parsing failed, retrying (attempt {attempt + 1}/3)")
+                        # Add JSON format reminder to the last message
+                        if messages and messages[-1].get("role") == "user":
+                            messages[-1]["content"] += "\n\nIMPORTANT: Please ensure your response is valid JSON format."
+                        continue
+                except Exception as e:
+                    if attempt == 2:
+                        print(f"⚠️  Claude API error after 3 attempts: {e}")
+                        raise e
+                    else:
+                        print(f"⚠️  Claude API error, retrying (attempt {attempt + 1}/3): {e}")
+                        continue
+
     
-    def ask_question(self, question: str, model: str = "gpt-5") -> str:
+    def ask_question(self, question: str, model: str = "gpt-5", verbosity: str = "medium") -> str:
         """
         Ask a question and get an AI response using dual-answer synthesis approach.
         Generates two answers (with and without auto-TOC) in parallel, then synthesizes them.
@@ -1001,7 +1185,7 @@ Provide your synthesized response in JSON format:
             
             # Synthesize the best aspects of both answers
             synthesized_response, combined_stats = self._synthesize_answers(
-                toc_answer_data, non_toc_answer_data, question, model
+                toc_answer_data, non_toc_answer_data, question, model, verbosity
             )
             
             # Use all unique chunks from both approaches for history

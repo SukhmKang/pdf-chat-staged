@@ -946,8 +946,7 @@ class PDFLayoutParser:
             
             # Process each page to find major sections
             for page_num in range(len(self.pages_layout)):
-                page_layout = self.pages_layout[page_num]
-                page_text = self._extract_page_text_for_toc_analysis(page_layout)
+                page_text = self.pypdf_pages_text[page_num]
                 
                 if not page_text.strip():
                     continue
@@ -1058,6 +1057,10 @@ Do NOT include:
 - Very short phrases
 - Author names or affiliations
 - Regular paragraph text
+- Table of Contents entries (if this page is a TOC page, return empty array)
+- Section titles that appear in a list format with page numbers (these are TOC entries, not actual section headings)
+
+IMPORTANT: Only extract actual section headings that appear in the document content itself, NOT section titles that appear in a table of contents listing.
 
 Return a JSON object with a key "sections" mapping to an array of objects with: {"title": "section name", "level": 0-2}
 If no major sections are found, have "sections" map to an empty array []."""

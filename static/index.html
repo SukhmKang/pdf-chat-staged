@@ -15,6 +15,9 @@
     <!-- Icons -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     
+    <!-- Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+    
     <style>
         .chat-message {
             animation: slideIn 0.3s ease-out;
@@ -252,6 +255,95 @@
             background: rgba(255, 235, 59, 0.4) !important;
             transition: all 1s ease-out;
         }
+        
+        /* Markdown styling within chat messages */
+        .chat-message .markdown-content h1,
+        .chat-message .markdown-content h2,
+        .chat-message .markdown-content h3 {
+            font-weight: bold;
+            margin: 0.75rem 0 0.5rem 0;
+            color: inherit;
+        }
+        
+        /* Remove top margin from first element to avoid blank space at top of bubble */
+        .chat-message .markdown-content > :first-child {
+            margin-top: 0 !important;
+        }
+        
+        /* Remove bottom margin from last element for consistent spacing */
+        .chat-message .markdown-content > :last-child {
+            margin-bottom: 0 !important;
+        }
+        
+        .chat-message .markdown-content h1 { font-size: 1.25rem; }
+        .chat-message .markdown-content h2 { font-size: 1.125rem; }
+        .chat-message .markdown-content h3 { font-size: 1rem; }
+        
+        .chat-message .markdown-content ul,
+        .chat-message .markdown-content ol {
+            margin: 0.5rem 0;
+            padding-left: 1.5rem;
+            list-style-position: outside;
+        }
+        
+        .chat-message .markdown-content ul {
+            list-style-type: disc !important;
+        }
+        
+        .chat-message .markdown-content ol {
+            list-style-type: decimal !important;
+        }
+        
+        .chat-message .markdown-content ul ul {
+            list-style-type: circle;
+            margin-top: 0.25rem;
+            margin-bottom: 0.25rem;
+        }
+        
+        .chat-message .markdown-content ul ul ul {
+            list-style-type: square;
+        }
+        
+        .chat-message .markdown-content li {
+            margin: 0.25rem 0;
+            display: list-item;
+        }
+        
+        .chat-message .markdown-content strong {
+            font-weight: 600;
+        }
+        
+        .chat-message .markdown-content em {
+            font-style: italic;
+        }
+        
+        .chat-message .markdown-content code {
+            background-color: rgba(0, 0, 0, 0.1);
+            padding: 0.125rem 0.25rem;
+            border-radius: 0.25rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875em;
+        }
+        
+        .chat-message .markdown-content pre {
+            background-color: rgba(0, 0, 0, 0.05);
+            padding: 0.75rem;
+            border-radius: 0.375rem;
+            overflow-x: auto;
+            margin: 0.5rem 0;
+        }
+        
+        .chat-message .markdown-content pre code {
+            background-color: transparent;
+            padding: 0;
+        }
+        
+        .chat-message .markdown-content blockquote {
+            border-left: 3px solid #e5e7eb;
+            margin: 0.5rem 0;
+            padding-left: 1rem;
+            color: #6b7280;
+        }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -270,6 +362,7 @@
             <div class="p-4 border-b border-gray-200">
                 <label class="block text-sm font-medium text-gray-700 mb-2">AI Model</label>
                 <select id="modelSelect" class="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="claude">Claude Sonnet 4</option>
                     <option value="gpt-5">GPT-5</option>
                     <option value="gpt-4o">GPT-4 Omni</option>
                 </select>
@@ -283,27 +376,88 @@
                         <i class="fas fa-arrow-left mr-1"></i> Collection
                     </button>
                 </div>
-                <div id="pdfList" class="space-y-2 max-h-60 overflow-y-auto">
+                <div id="pdfList" class="space-y-2 max-h-28 overflow-y-auto">
                     <div class="text-gray-500 text-sm">Select a collection first</div>
                 </div>
             </div>
             
-            <!-- TOC Sections -->
+            <!-- Chat Mode Selector -->
             <div class="p-4 border-t border-gray-200">
                 <div class="flex items-center justify-between mb-2">
-                    <label class="block text-sm font-medium text-gray-700">TOC Sections</label>
-                    <div class="relative group">
-                        <div class="text-xs text-gray-500 hover:text-gray-700 cursor-help">
-                            <i class="fas fa-info-circle"></i> Multi-select
+                    <div class="flex items-center space-x-3">
+                        <label class="text-sm font-medium text-gray-700">Chat Mode</label>
+                        
+                        <!-- Mode Toggle Buttons - Inline -->
+                        <div id="modeToggleContainer" class="flex bg-gray-100 rounded-md p-0.5 opacity-50 pointer-events-none">
+                            <button id="tocModeBtn" class="px-2 py-1 text-xs rounded-sm bg-blue-500 text-white transition-colors duration-200 cursor-not-allowed flex items-center space-x-1">
+                                <i class="fas fa-list text-xs"></i>
+                                <span>TOC</span>
+                            </button>
+                            <button id="pageRangeModeBtn" class="px-2 py-1 text-xs rounded-sm text-gray-600 hover:text-gray-800 transition-colors duration-200 cursor-not-allowed flex items-center space-x-1">
+                                <i class="fas fa-file-alt text-xs"></i>
+                                <span>Pages</span>
+                            </button>
                         </div>
-                        <div class="absolute right-0 top-6 bg-gray-800 text-white text-xs rounded px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-10">
-                            <i class="fas fa-mouse-pointer mr-1"></i>
-                            Click: single section | Ctrl/Cmd+click: multiple
+                    </div>
+                    
+                    <div class="relative inline-block">
+                        <div class="text-xs text-gray-500 hover:text-gray-700 cursor-help group">
+                            <i class="fas fa-info-circle"></i>
+                            <div id="modeTooltip" class="absolute right-0 top-6 bg-gray-800 text-white text-xs rounded px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-10 pointer-events-none">
+                                Select a PDF to choose chat mode
+                            </div>
                         </div>
                     </div>
                 </div>
-                <div id="tocList" class="space-y-1 max-h-40 overflow-y-auto">
-                    <div class="text-gray-500 text-sm">Select a PDF first</div>
+                
+                <!-- No PDF Selected Message -->
+                <div id="noPdfMessage" class="text-center text-gray-500 text-sm py-1 mb-2">
+                    Select a PDF to choose chat mode
+                </div>
+                
+                <!-- TOC Sections View -->
+                <div id="tocView" class="block">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs text-gray-600">TOC Sections</span>
+                        <div class="text-xs text-gray-500">
+                            <i class="fas fa-mouse-pointer mr-1"></i>
+                            Multi-select
+                        </div>
+                    </div>
+                    <div id="tocList" class="space-y-1 max-h-32 overflow-y-auto">
+                        <div class="text-gray-500 text-sm">Select a PDF first</div>
+                    </div>
+                </div>
+                
+                <!-- Page Range View -->
+                <div id="pageRangeView" class="hidden">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs text-gray-600">Page Range</span>
+                        <div class="text-xs text-gray-500">
+                            <i class="fas fa-file-alt mr-1"></i>
+                            Format: 1-10
+                        </div>
+                    </div>
+                    <div class="flex space-x-2 mb-2">
+                        <input 
+                            type="text" 
+                            id="pageRangeInput" 
+                            placeholder="e.g., 1-10" 
+                            class="flex-1 p-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        >
+                        <button 
+                            id="applyPageRangeBtn" 
+                            class="px-3 py-2 text-sm bg-orange-500 text-white rounded hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        >
+                            Apply
+                        </button>
+                    </div>
+                    <div id="currentPageRange" class="text-xs text-gray-500 hidden">
+                        Current: <span id="pageRangeDisplay"></span>
+                        <button id="clearPageRangeBtn" class="ml-2 text-orange-500 hover:text-orange-600">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
             
@@ -365,6 +519,14 @@
                     <div class="flex items-center justify-between">
                         <h2 class="font-medium text-gray-800">Chat</h2>
                         <div class="flex items-center space-x-2">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-xs text-gray-600 font-medium">Verbosity:</span>
+                                <select id="verbositySelector" class="text-xs px-3 py-1.5 border border-gray-300 rounded-md bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors">
+                                    <option value="high">High</option>
+                                    <option value="medium" selected>Medium</option>
+                                    <option value="low">Low</option>
+                                </select>
+                            </div>
                             <button id="clearChat" class="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200">
                                 Clear
                             </button>

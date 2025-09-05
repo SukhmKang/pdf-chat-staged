@@ -4,6 +4,7 @@ class PDFChatApp {
         this.currentCollection = '';
         this.currentPDF = '';
         this.currentTOCSections = [];  // Changed from single string to array
+        this.currentPageRange = null;  // For page range chat mode
         this.pdfDoc = null;
         this.currentPage = 1;
         this.scale = 1.2;
@@ -31,6 +32,26 @@ class PDFChatApp {
         this.chatModeIndicator = document.getElementById('chatModeIndicator');
         this.backToCollectionBtn = document.getElementById('backToCollection');
         
+        // Page range elements
+        this.tocModeBtn = document.getElementById('tocModeBtn');
+        this.pageRangeModeBtn = document.getElementById('pageRangeModeBtn');
+        this.modeToggleContainer = document.getElementById('modeToggleContainer');
+        this.noPdfMessage = document.getElementById('noPdfMessage');
+        this.tocView = document.getElementById('tocView');
+        this.pageRangeView = document.getElementById('pageRangeView');
+        this.pageRangeInput = document.getElementById('pageRangeInput');
+        this.applyPageRangeBtn = document.getElementById('applyPageRangeBtn');
+        this.clearPageRangeBtn = document.getElementById('clearPageRangeBtn');
+        this.currentPageRangeDiv = document.getElementById('currentPageRange');
+        this.pageRangeDisplay = document.getElementById('pageRangeDisplay');
+        this.modeTooltip = document.getElementById('modeTooltip');
+        
+        // Track current mode
+        this.currentMode = 'pdf';  // 'pdf', 'toc', 'page_range'
+        
+        // Track verbosity setting
+        this.currentVerbosity = 'medium';  // 'low', 'medium', 'high'
+        
         // PDF viewer elements
         this.pdfTitle = document.getElementById('pdfTitle');
         this.pdfContainer = document.getElementById('pdfContainer');
@@ -47,6 +68,7 @@ class PDFChatApp {
         this.chatInput = document.getElementById('chatInput');
         this.sendButton = document.getElementById('sendButton');
         this.clearChatBtn = document.getElementById('clearChat');
+        this.verbositySelector = document.getElementById('verbositySelector');
         this.typingIndicator = document.getElementById('typingIndicator');
         
         // Check for missing elements
@@ -60,7 +82,10 @@ class PDFChatApp {
             pdfControls: this.pdfControls,
             chatMessages: this.chatMessages,
             chatInput: this.chatInput,
-            sendButton: this.sendButton
+            sendButton: this.sendButton,
+            tocModeBtn: this.tocModeBtn,
+            pageRangeModeBtn: this.pageRangeModeBtn,
+            applyPageRangeBtn: this.applyPageRangeBtn
         };
         
         for (const [name, element] of Object.entries(requiredElements)) {
@@ -108,6 +133,40 @@ class PDFChatApp {
             });
         }
         
+        // Chat mode toggle buttons
+        if (this.tocModeBtn) {
+            this.tocModeBtn.addEventListener('click', () => {
+                this.switchToTOCMode();
+            });
+        }
+        
+        if (this.pageRangeModeBtn) {
+            this.pageRangeModeBtn.addEventListener('click', () => {
+                this.switchToPageRangeMode();
+            });
+        }
+        
+        // Page range controls
+        if (this.applyPageRangeBtn) {
+            this.applyPageRangeBtn.addEventListener('click', () => {
+                this.applyPageRange();
+            });
+        }
+        
+        if (this.pageRangeInput) {
+            this.pageRangeInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    this.applyPageRange();
+                }
+            });
+        }
+        
+        if (this.clearPageRangeBtn) {
+            this.clearPageRangeBtn.addEventListener('click', () => {
+                this.clearPageRange();
+            });
+        }
+        
         // Chat input
         if (this.chatInput) {
             this.chatInput.addEventListener('keypress', (e) => {
@@ -128,6 +187,14 @@ class PDFChatApp {
         if (this.clearChatBtn) {
             this.clearChatBtn.addEventListener('click', () => {
                 this.clearChat();
+            });
+        }
+        
+        // Verbosity selector
+        if (this.verbositySelector) {
+            this.verbositySelector.addEventListener('change', () => {
+                this.currentVerbosity = this.verbositySelector.value;
+                console.log('Verbosity changed to:', this.currentVerbosity);
             });
         }
         
@@ -257,10 +324,15 @@ class PDFChatApp {
     selectPDF(pdf) {
         this.currentPDF = pdf.filename;
         this.currentTOCSections = [];  // Clear selected sections
+        this.currentPageRange = null;  // Clear page range
+        this.currentMode = 'pdf';      // Reset to PDF mode
         
         // Update UI
         this.pdfTitle.textContent = pdf.title || pdf.filename;
         this.pdfControls.style.display = 'flex';
+        
+        // Enable mode selector now that PDF is selected
+        this.enableModeSelector();
         
         // Show back to collection button
         if (this.backToCollectionBtn) {
@@ -272,6 +344,9 @@ class PDFChatApp {
         
         // Load TOC sections
         this.loadTOCSections(pdf.toc_sections);
+        
+        // Reset to PDF mode (show TOC view by default)
+        this.switchToPDFMode();
         
         // Update chat mode
         this.updateChatMode();
@@ -291,6 +366,7 @@ class PDFChatApp {
         // Clear PDF-related state
         this.currentPDF = '';
         this.currentTOCSections = [];  // Clear selected sections array
+        this.currentPageRange = null;  // Clear page range
         this.pendingScrollPage = null;
         this.pendingChunkHighlight = null;
         
@@ -315,6 +391,16 @@ class PDFChatApp {
         
         // Clear TOC sections
         this.tocList.innerHTML = '<div class="text-gray-500 text-sm">Select a PDF first</div>';
+        
+        // Clear page range
+        if (this.pageRangeInput) this.pageRangeInput.value = '';
+        if (this.currentPageRangeDiv) this.currentPageRangeDiv.classList.add('hidden');
+        
+        // Disable mode selector
+        this.disableModeSelector();
+        
+        // Reset mode
+        this.currentMode = 'pdf';
         
         // Remove highlight from all PDFs
         document.querySelectorAll('#pdfList > div').forEach(item => {
@@ -357,16 +443,30 @@ class PDFChatApp {
     }
     
     selectSingleTOCSection(section, tocItem) {
-        // Clear all previous selections
-        this.currentTOCSections = [section];
-        
-        // Update UI - clear all highlights and highlight only selected
-        document.querySelectorAll('#tocList > div').forEach(item => {
-            item.classList.remove('bg-green-100', 'border-green-300');
-        });
-        tocItem.classList.add('bg-green-100', 'border-green-300');
+        // Check if this section is already selected (to allow deselection)
+        if (this.currentTOCSections.includes(section)) {
+            // Deselect - remove from array and clear highlighting
+            this.currentTOCSections = this.currentTOCSections.filter(s => s !== section);
+            tocItem.classList.remove('bg-green-100', 'border-green-300');
+            
+            // If no sections selected, return to PDF mode
+            if (this.currentTOCSections.length === 0) {
+                this.currentMode = 'pdf';
+            }
+        } else {
+            // Select - clear other selections and select this one
+            this.currentTOCSections = [section];
+            this.currentMode = 'toc';
+            
+            // Update UI - clear all highlights and highlight only selected
+            document.querySelectorAll('#tocList > div').forEach(item => {
+                item.classList.remove('bg-green-100', 'border-green-300');
+            });
+            tocItem.classList.add('bg-green-100', 'border-green-300');
+        }
         
         this.updateChatMode();
+        this.updateModeTooltip();
     }
     
     toggleTOCSection(section, tocItem) {
@@ -376,13 +476,20 @@ class PDFChatApp {
             // Add section
             this.currentTOCSections.push(section);
             tocItem.classList.add('bg-green-100', 'border-green-300');
+            this.currentMode = 'toc';
         } else {
             // Remove section
             this.currentTOCSections.splice(index, 1);
             tocItem.classList.remove('bg-green-100', 'border-green-300');
+            
+            // If no sections left, return to PDF mode
+            if (this.currentTOCSections.length === 0) {
+                this.currentMode = 'pdf';
+            }
         }
         
         this.updateChatMode();
+        this.updateModeTooltip();
     }
     
     async loadPDF(filename) {
@@ -1106,7 +1213,13 @@ NY
         let textColor = 'text-blue-800';
         let descColor = 'text-blue-600';
         
-        if (this.currentTOCSections.length > 0) {
+        if (this.currentPageRange) {
+            mode = 'Page Range Mode';
+            description = `Chatting with pages ${this.currentPageRange} in ${this.currentPDF}`;
+            bgColor = 'bg-orange-50';
+            textColor = 'text-orange-800';
+            descColor = 'text-orange-600';
+        } else if (this.currentTOCSections.length > 0) {
             mode = this.currentTOCSections.length === 1 ? 'TOC Section Mode' : 'Multiple TOC Sections Mode';
             if (this.currentTOCSections.length === 1) {
                 description = `Chatting with "${this.currentTOCSections[0]}" in ${this.currentPDF}`;
@@ -1133,6 +1246,12 @@ NY
             <div class="text-xs ${descColor}">${description}</div>
             <div class="text-xs text-blue-500 mt-1">Using ${modelDisplay}</div>
         `;
+        
+        // Update mode buttons to reflect current state
+        if (this.currentPDF) {
+            this.updateModeButtons();
+            this.updateModeTooltip();
+        }
     }
         
     async sendMessage() {
@@ -1158,7 +1277,9 @@ NY
                     pdf_filename: this.currentPDF || null,
                     toc_sections: this.currentTOCSections.length > 0 ? this.currentTOCSections : null,
                     toc_section: this.currentTOCSections.length === 1 ? this.currentTOCSections[0] : null, // For backward compatibility
+                    page_range: this.currentPageRange,
                     model: this.modelSelect ? this.modelSelect.value : 'gpt-5',
+                    verbosity: this.currentVerbosity,
                     enhanced: false
                 })
             });
@@ -1260,23 +1381,52 @@ NY
     }
     
     formatMarkdown(text) {
-        // First handle citation tags before other formatting
-        let formattedText = this.parseCitations(text);
+        // Parse citations first and store them
+        const parsedCitations = [];
+        const citationRegex = /<citation\s+pdf_name="([^"]+)"\s+page_number="([^"]+)"\s+chunk_id="([^"]+)"\s+cited_text="(.*?)">/g;
         
-        // Then apply basic markdown formatting
-        formattedText = formattedText
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.*?)\*/g, '<em>$1</em>')
-            .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1 rounded">$1</code>')
-            .replace(/\n/g, '<br>');
+        // Replace citations with unique placeholders and parse them immediately
+        let textWithPlaceholders = text.replace(citationRegex, (match) => {
+            const parsedCitation = this.parseCitations(match);
+            const placeholder = `CITATIONPLACEHOLDER${parsedCitations.length}CITATIONPLACEHOLDER`;
+            parsedCitations.push(parsedCitation);
+            return placeholder;
+        });
+        
+        // Apply full markdown parsing with marked.js
+        let formattedText;
+        try {
+            // Configure marked for better security and formatting
+            marked.setOptions({
+                breaks: true,        // Convert \n to <br>
+                gfm: true,          // GitHub Flavored Markdown
+                sanitize: false      // We'll handle our own sanitization
+            });
             
-        return formattedText;
+            formattedText = marked.parse(textWithPlaceholders);
+        } catch (error) {
+            console.warn('Markdown parsing failed, falling back to basic formatting:', error);
+            // Fallback to basic formatting
+            formattedText = textWithPlaceholders
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                .replace(/`(.*?)`/g, '<code>$1</code>')
+                .replace(/\n/g, '<br>');
+        }
+        
+        // Restore parsed citations by replacing placeholders
+        parsedCitations.forEach((parsedCitation, index) => {
+            const placeholder = `CITATIONPLACEHOLDER${index}CITATIONPLACEHOLDER`;
+            formattedText = formattedText.replace(new RegExp(placeholder, 'g'), parsedCitation);
+        });
+        
+        return `<div class="markdown-content">${formattedText}</div>`;
     }
     
     parseCitations(text) {
         // Parse citation tags and convert to clickable elements
         // Updated regex to also capture cited_text field
-        const citationRegex = /<citation\s+pdf_name="([^"]+)"\s+page_number="([^"]+)"\s+chunk_id="([^"]+)"\s+cited_text="([^"]*)">/g;
+        const citationRegex = /<citation\s+pdf_name="([^"]+)"\s+page_number="([^"]+)"\s+chunk_id="([^"]+)"\s+cited_text="(.*?)">/g;
         
         return text.replace(citationRegex, (_, pdfName, pageNumber, chunkId, citedText) => {
             // Extract just the PDF filename without extension for display
@@ -1733,6 +1883,223 @@ NY
     
     showError(message) {
         this.addMessage(message, 'error');
+    }
+    
+    // Mode Management Methods
+    enableModeSelector() {
+        if (this.modeToggleContainer) {
+            this.modeToggleContainer.classList.remove('opacity-50', 'pointer-events-none');
+            this.modeToggleContainer.classList.add('opacity-100', 'pointer-events-auto');
+        }
+        
+        if (this.tocModeBtn) {
+            this.tocModeBtn.classList.remove('cursor-not-allowed');
+            this.tocModeBtn.classList.add('cursor-pointer');
+        }
+        
+        if (this.pageRangeModeBtn) {
+            this.pageRangeModeBtn.classList.remove('cursor-not-allowed');
+            this.pageRangeModeBtn.classList.add('cursor-pointer');
+        }
+        
+        if (this.noPdfMessage) {
+            this.noPdfMessage.classList.add('hidden');
+        }
+        
+        // Update tooltip for enabled state
+        this.updateModeTooltip();
+    }
+    
+    disableModeSelector() {
+        if (this.modeToggleContainer) {
+            this.modeToggleContainer.classList.add('opacity-50', 'pointer-events-none');
+            this.modeToggleContainer.classList.remove('opacity-100', 'pointer-events-auto');
+        }
+        
+        if (this.tocModeBtn) {
+            this.tocModeBtn.classList.add('cursor-not-allowed');
+            this.tocModeBtn.classList.remove('cursor-pointer');
+        }
+        
+        if (this.pageRangeModeBtn) {
+            this.pageRangeModeBtn.classList.add('cursor-not-allowed');
+            this.pageRangeModeBtn.classList.remove('cursor-pointer');
+        }
+        
+        if (this.noPdfMessage) {
+            this.noPdfMessage.classList.remove('hidden');
+        }
+        
+        // Update tooltip for disabled state
+        this.updateModeTooltip();
+    }
+    
+    switchToPDFMode() {
+        // Default mode - show TOC view but don't select anything
+        this.currentMode = 'pdf';
+        
+        // Clear all selections
+        this.currentTOCSections = [];
+        this.currentPageRange = null;
+        
+        // Clear UI selections
+        if (this.tocList) {
+            const tocItems = this.tocList.querySelectorAll('div');
+            tocItems.forEach(item => {
+                item.classList.remove('bg-green-100', 'border-green-300');
+            });
+        }
+        
+        if (this.pageRangeInput) this.pageRangeInput.value = '';
+        if (this.currentPageRangeDiv) this.currentPageRangeDiv.classList.add('hidden');
+        
+        // Update button states
+        this.updateModeButtons();
+        
+        // Show TOC view by default (but nothing selected)
+        if (this.tocView) this.tocView.classList.remove('hidden');
+        if (this.pageRangeView) this.pageRangeView.classList.add('hidden');
+    }
+    
+    switchToTOCMode() {
+        // Only switch UI, actual TOC selections are handled by TOC click handlers
+        if (this.tocView) this.tocView.classList.remove('hidden');
+        if (this.pageRangeView) this.pageRangeView.classList.add('hidden');
+        
+        // Clear page range
+        this.currentPageRange = null;
+        if (this.pageRangeInput) this.pageRangeInput.value = '';
+        if (this.currentPageRangeDiv) this.currentPageRangeDiv.classList.add('hidden');
+        
+        this.updateModeButtons();
+        this.updateChatMode();
+        this.updateModeTooltip();
+    }
+    
+    switchToPageRangeMode() {
+        // Clear TOC selections and switch to page range mode
+        this.currentTOCSections = [];
+        
+        // Clear TOC UI selections
+        if (this.tocList) {
+            const tocItems = this.tocList.querySelectorAll('div');
+            tocItems.forEach(item => {
+                item.classList.remove('bg-green-100', 'border-green-300');
+            });
+        }
+        
+        // Show page range view
+        if (this.tocView) this.tocView.classList.add('hidden');
+        if (this.pageRangeView) this.pageRangeView.classList.remove('hidden');
+        
+        this.updateModeButtons();
+        this.updateChatMode();
+        this.updateModeTooltip();
+    }
+    
+    updateModeButtons() {
+        // Reset all button states
+        if (this.tocModeBtn) {
+            this.tocModeBtn.classList.remove('bg-blue-500', 'bg-orange-500', 'bg-purple-500', 'text-white');
+            this.tocModeBtn.classList.add('text-gray-600');
+        }
+        
+        if (this.pageRangeModeBtn) {
+            this.pageRangeModeBtn.classList.remove('bg-blue-500', 'bg-orange-500', 'bg-purple-500', 'text-white');
+            this.pageRangeModeBtn.classList.add('text-gray-600');
+        }
+        
+        // Highlight active mode based on which view is currently visible
+        if (this.pageRangeView && !this.pageRangeView.classList.contains('hidden')) {
+            // Page range view is active
+            if (this.pageRangeModeBtn) {
+                this.pageRangeModeBtn.classList.add('bg-orange-500', 'text-white');
+                this.pageRangeModeBtn.classList.remove('text-gray-600');
+            }
+        } else if (this.tocView && !this.tocView.classList.contains('hidden')) {
+            // TOC view is active (default)
+            if (this.tocModeBtn) {
+                this.tocModeBtn.classList.add('bg-blue-500', 'text-white');
+                this.tocModeBtn.classList.remove('text-gray-600');
+            }
+        }
+    }
+    
+    updateModeTooltip() {
+        if (!this.modeTooltip) return;
+        
+        if (!this.currentPDF) {
+            // No PDF selected
+            this.modeTooltip.textContent = "Select a PDF to choose chat mode";
+        } else if (this.currentMode === 'page_range' || (this.pageRangeView && !this.pageRangeView.classList.contains('hidden'))) {
+            // Page range mode active
+            this.modeTooltip.textContent = "Enter page range (e.g., 1-10) to chat with specific pages";
+        } else if (this.currentMode === 'toc' && this.currentTOCSections.length > 0) {
+            // TOC sections selected
+            if (this.currentTOCSections.length === 1) {
+                this.modeTooltip.textContent = `Click "${this.currentTOCSections[0]}" again to deselect and return to PDF mode`;
+            } else {
+                this.modeTooltip.textContent = `Ctrl/Cmd+click sections to deselect. Clear all to return to PDF mode`;
+            }
+        } else if (this.currentMode === 'pdf' || this.currentTOCSections.length === 0) {
+            // PDF mode or TOC view but nothing selected
+            if (!this.tocView.classList.contains('hidden')) {
+                this.modeTooltip.textContent = "Click: single section | Ctrl/Cmd+click: multiple sections";
+            } else {
+                this.modeTooltip.textContent = "Switch between TOC sections and page ranges";
+            }
+        } else {
+            // Fallback
+            this.modeTooltip.textContent = "Switch between TOC sections and page ranges";
+        }
+    }
+    
+    applyPageRange() {
+        const pageRange = this.pageRangeInput.value.trim();
+        if (!pageRange) {
+            this.showError('Please enter a page range (e.g., "1-10")');
+            return;
+        }
+        
+        // Validate page range format
+        const rangePattern = /^\d+-\d+$/;
+        if (!rangePattern.test(pageRange)) {
+            this.showError('Invalid format. Use "start-end" like "1-10"');
+            return;
+        }
+        
+        const [startPage, endPage] = pageRange.split('-').map(num => parseInt(num));
+        if (startPage >= endPage) {
+            this.showError('Start page must be less than end page');
+            return;
+        }
+        
+        // Store current page range and clear TOC selections
+        this.currentPageRange = pageRange;
+        this.currentTOCSections = [];
+        this.currentMode = 'page_range';
+        
+        // Clear TOC UI selections
+        document.querySelectorAll('#tocList > div').forEach(item => {
+            item.classList.remove('bg-green-100', 'border-green-300');
+        });
+        
+        // Update UI
+        if (this.pageRangeDisplay) this.pageRangeDisplay.textContent = pageRange;
+        if (this.currentPageRangeDiv) this.currentPageRangeDiv.classList.remove('hidden');
+        
+        // Update chat mode
+        this.updateChatMode();
+        this.updateModeTooltip();
+    }
+    
+    clearPageRange() {
+        this.currentPageRange = null;
+        this.currentMode = 'pdf';  // Return to PDF mode
+        if (this.pageRangeInput) this.pageRangeInput.value = '';
+        if (this.currentPageRangeDiv) this.currentPageRangeDiv.classList.add('hidden');
+        this.updateChatMode();
+        this.updateModeTooltip();
     }
     
     showLoadingMessage(message) {

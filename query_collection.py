@@ -1119,6 +1119,200 @@ Use "entire pdf" for documents where the query is too general or doesn't clearly
         except Exception as e:
             print(f"Error querying specific PDFs: {e}")
             return {"results": [], "total_found": 0}
+        
+    def query_by_page_range(self, query: str, pdf_filename: str, start_page: int, end_page: int,
+                           n_results: int = 10, chunk_type: str = "child", use_hyde: bool = None, 
+                           max_context_tokens: int = 8000) -> Dict[str, Any]:
+        """
+        Query chunks within a specific page range of a PDF.
+        For small ranges, returns full page text directly. For larger ranges, uses RAG.
+        
+        Args:
+            query: Search query text
+            pdf_filename: Name of the PDF to search within
+            start_page: Starting page number (inclusive)
+            end_page: Ending page number (inclusive)
+            n_results: Number of results to return
+            chunk_type: Type of chunks to search ("child" or "parent")
+            use_hyde: Whether to use HyDE for this query (overrides global setting if not None)
+            max_context_tokens: Maximum tokens for context window
+            
+        Returns:
+            Query results with metadata compatible with citation system
+        """
+        # First, check if we can retrieve full page text for small ranges
+        full_pages_result = self._try_get_full_pages_from_files(pdf_filename, start_page, end_page, max_context_tokens)
+        if full_pages_result and chunk_type == "parent":
+            return full_pages_result
+        
+        # Fallback to regular RAG with optimized query
+        # Determine settings
+        should_use_hyde = use_hyde if use_hyde is not None else self.enable_hyde
+        
+        # Validate PDF filename
+        available_pdfs = self.vector_store.get_available_pdfs()
+        if pdf_filename not in available_pdfs:
+            print(f"Warning: PDF '{pdf_filename}' is not in the collection")
+            return {"results": [], "total_found": 0}
+        
+        try:
+            print(f"🔍 Querying page range {start_page}-{end_page} in {pdf_filename}")
+            
+            # Use HyDE if enabled
+            search_query = query
+            if should_use_hyde and hasattr(self, 'hyde_generator') and self.hyde_generator:
+                search_query = self.hyde_generator.generate_hypothetical_document(query)
+                print(f"🧠 HyDE enhanced query generated")
+            
+            # Optimized ChromaDB query with proper where clause structure including chunk_type
+            where_clause = {
+                "$and": [
+                    {"pdf_filename": {"$eq": pdf_filename}},
+                    {"page_number": {"$gte": start_page}},
+                    {"page_number": {"$lte": end_page}},
+                    {"chunk_type": {"$eq": chunk_type}}
+                ]
+            }
+            
+            # Query using embeddings for semantic search
+            query_embedding = self.vector_store._get_openai_embeddings([search_query])[0]
+            
+            results = self.vector_store.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+                where=where_clause,
+                include=["documents", "metadatas", "distances"]
+            )
+            
+            # Process results with proper citation-compatible structure
+            processed_results = []
+            if results["documents"] and results["documents"][0]:
+                for i, (doc, metadata, distance) in enumerate(zip(
+                    results["documents"][0],
+                    results["metadatas"][0],
+                    results["distances"][0]
+                )):
+                    # Structure results for citation compatibility
+                    result = {
+                        "content": doc,
+                        "metadata": {
+                            "page_number": metadata.get("page_number", 0),
+                            "pdf_filename": pdf_filename,  # Ensure this field exists
+                            "pdf_name": pdf_filename,      # Also include pdf_name for citation compatibility
+                            "toc_title": metadata.get("toc_title", ""),
+                            "corrected_toc_page": metadata.get("corrected_toc_page", 0),
+                            "chunk_id": metadata.get("chunk_id", ""),
+                        },
+                        "similarity_score": 1 - distance,  # Convert distance to similarity
+                        "rank": i + 1
+                    }
+                    processed_results.append(result)
+            
+            print(f"📄 Found {len(processed_results)} results in page range {start_page}-{end_page}")
+            
+            return {
+                "results": processed_results,
+                "total_found": len(processed_results),
+                "query_metadata": {
+                    "pdf_filename": pdf_filename,
+                    "page_range": f"{start_page}-{end_page}",
+                    "used_hyde": should_use_hyde,
+                    "chunk_type": chunk_type,
+                    "method": "rag"
+                }
+            }
+            
+        except Exception as e:
+            print(f"Error querying page range {start_page}-{end_page}: {e}")
+            return {"results": [], "total_found": 0}
+    
+    def _try_get_full_pages_from_files(self, pdf_filename: str, start_page: int, end_page: int, 
+                                      max_context_tokens: int = 8000) -> Optional[Dict[str, Any]]:
+        """
+        Try to retrieve full page text from layout files for small page ranges.
+        
+        Args:
+            pdf_filename: PDF filename
+            start_page: Start page number
+            end_page: End page number  
+            max_context_tokens: Maximum context tokens allowed
+            
+        Returns:
+            Full page results if successful and within token limit, None otherwise
+        """
+        page_count = end_page - start_page + 1
+        
+        # Only try for small page ranges (max 5 pages)
+        if page_count > 10:
+            return None
+            
+        # Estimate tokens (rough approximation: 1 page ≈ 500-1000 tokens)
+        estimated_tokens = page_count * 750  # Conservative estimate
+        if estimated_tokens > max_context_tokens:
+            return None
+            
+        try:
+            # Look for layout file in processed_output directory
+            layout_file = Path("processed_output") / f"{pdf_filename.replace('.pdf', '')}_layout.json"
+            
+            if not layout_file.exists():
+                print(f"Layout file not found: {layout_file}")
+                return None
+            
+            # Load and parse the JSON layout file
+            import json
+            try:
+                with open(layout_file, 'r', encoding='utf-8') as f:
+                    layout_data = json.load(f)
+            except Exception as e:
+                print(f"Error loading layout file: {e}")
+                return None
+            
+            # Collect full page texts for requested page range
+            full_pages = []
+            
+            # Look through the pages array
+            if 'pages' in layout_data:
+                for page_data in layout_data['pages']:
+                    page_num = page_data.get('page_number', 0)
+                    
+                    # Check if this page is in our requested range
+                    if start_page <= page_num <= end_page:
+                        # Extract full page text
+                        if 'full_page_text' in page_data:
+                            full_text = page_data['full_page_text']
+                            if full_text and full_text.strip():
+                                full_pages.append({
+                                    "content": full_text,
+                                    "metadata": {
+                                        "page_number": page_num,
+                                        "pdf_filename": pdf_filename,
+                                        "pdf_name": pdf_filename,  # For citation compatibility
+                                        "chunk_id": f"{pdf_filename}:page:{page_num}",
+                                        "is_full_page": True
+                                    },
+                                    "similarity_score": 1.0,  # Perfect score for full pages
+                                    "rank": page_num - start_page + 1
+                                })
+            
+            if full_pages:
+                print(f"📄 Retrieved full page text for {len(full_pages)} pages (pages {start_page}-{end_page})")
+                return {
+                    "results": full_pages,
+                    "total_found": len(full_pages),
+                    "query_metadata": {
+                        "pdf_filename": pdf_filename,
+                        "page_range": f"{start_page}-{end_page}",
+                        "used_hyde": False,
+                        "method": "full_page_text",
+                        "pages_retrieved": len(full_pages)
+                    }
+                }
+            
+        except Exception as e:
+            print(f"Error retrieving full page text: {e}")
+            
+        return None
     
     def get_pdf_overview(self, pdf_filename: str, n_chunks: int = 5) -> Dict[str, Any]:
         """
@@ -1371,6 +1565,7 @@ Use "entire pdf" for documents where the query is too general or doesn't clearly
             else:
                 print(f"{i}. {title} (Page {page}){source_indicator}")
             
+            print(f"   Chunk ID {result.get('chunk_id')}")
             print(f"   Similarity: {score:.3f}")
             
             # Show matched keywords if available
