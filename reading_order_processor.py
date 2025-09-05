@@ -868,7 +868,7 @@ class ReadingOrderProcessor:
                 Does this page contain the start of the section "{first_title}"?
                 Look for headings, section titles, or chapter beginnings that match this.
 
-                Do not get confused with table of contents. The word(s) "${first_title}" might appear in the text if it is a table of contents, but that does not necessarily mean the section STARTS on the given page.
+                Do not get confused with table of contents. The word(s) "${first_title}" might appear in the text if it is a table of contents, but that does not necessarily mean the section STARTS on the given page. Also do not get confused with the title page of the paper/book. A section name may appear on the title page, but that doesn't mean the section starts on that page.
                 
                 Respond with "YES" if this page contains the section, or "NO" if it doesn't.
                 """
