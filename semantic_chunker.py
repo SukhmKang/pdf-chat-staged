@@ -747,13 +747,7 @@ class SemanticChunker:
             caption = metadata.get("caption", "")
             
             # Prepare the prompt for GPT-4 Vision
-            system_prompt = """You are analyzing a figure from a document. Provide a detailed but concise summary of what you see in the image. Focus on:
-1. The type of chart/graph/diagram
-2. Key data patterns or trends
-3. Main insights or findings
-4. Any notable visual elements
-
-Keep your response to 3-4 sentences and make it informative for someone who cannot see the image."""
+            system_prompt = """You are analyzing a figure from a document. Provide a transcription of any text in the figure and a summary/description of any images within the figure."""
             
             user_prompt = "Analyze this figure and provide a detailed summary of what it shows."
             if caption:
