@@ -18,6 +18,10 @@ class PDFChatApp {
         this.loadCollections();
         this.setupPDFCanvas();
         this.setTimeBasedGreeting();
+        this.checkBirthday();
+        
+        // Load chat history for initially selected collection (if any)
+        setTimeout(() => this.loadChatHistory(), 100);
         
         console.log('PDFChatApp initialized');
     }
@@ -115,6 +119,7 @@ class PDFChatApp {
                 // Clear any selected PDF when collection changes
                 this.clearPDFSelection();
                 this.loadPDFs();
+                this.loadChatHistory(); // Load chat history for new collection
                 this.updateChatMode();
             });
         }
@@ -178,6 +183,10 @@ class PDFChatApp {
         
         if (this.sendButton) {
             this.sendButton.addEventListener('click', () => {
+                // Add hearts animation if it's a birthday
+                if (this.isBirthday || this.isAnniversary) {
+                    this.createHeartsFromButton();
+                }
                 this.sendMessage();
             });
         }
@@ -241,11 +250,38 @@ class PDFChatApp {
             greeting = "Good morning, Kris!";
         } else if (hour >= 12 && hour < 17) {
             greeting = "Good afternoon, Kris!";
-        } else {
+        } else if (hour < 20) {
             greeting = "Good evening, Kris!";
+        } else {
+            greeting = "Don't work too late, please take care of yourself ok? :) "
         }
         
         greetingElement.textContent = greeting;
+    }
+    
+    showInitialGreeting() {
+        // Get the current time-based greeting
+        const now = new Date();
+        const hour = now.getHours();
+        let greeting;
+        
+        if (hour >= 5 && hour < 12) {
+            greeting = "Good morning, Kris!";
+        } else if (hour >= 12 && hour < 17) {
+            greeting = "Good afternoon, Kris!";
+        } else if (hour < 20) {
+            greeting = "Good evening, Kris!";
+        } else {
+            greeting = "Don't work too late, please take care of yourself ok? :) "
+        }
+        
+        // Display the greeting in the chat area
+        this.chatMessages.innerHTML = `
+            <div class="chat-message bg-blue-50 p-3 rounded-lg mb-6">
+                <div class="text-sm text-blue-800 font-medium">${greeting}</div>
+                <div class="text-sm text-blue-600 mt-1">Select a collection and start asking questions about your PDFs.</div>
+            </div>
+        `;
     }
     
     async loadCollections() {
@@ -419,6 +455,9 @@ class PDFChatApp {
             return;
         }
         
+        // Store sections data for later use
+        this.tocSections = sections;
+        
         sections.forEach(section => {
             const tocItem = document.createElement('div');
             tocItem.className = 'cursor-pointer p-2 text-sm rounded hover:bg-gray-100 border border-gray-200';
@@ -428,6 +467,10 @@ class PDFChatApp {
             const page = typeof section === 'object' && section.page > 0 ? ` (p.${section.page})` : '';
             
             tocItem.textContent = `${title}${page}`;
+            
+            // Store the section data on the element for easy access
+            tocItem.dataset.sectionTitle = title;
+            tocItem.dataset.sectionPage = typeof section === 'object' ? section.page : '';
             
             tocItem.addEventListener('click', (event) => {
                 // Support Ctrl/Cmd+click for multiple selections
@@ -463,6 +506,16 @@ class PDFChatApp {
                 item.classList.remove('bg-green-100', 'border-green-300');
             });
             tocItem.classList.add('bg-green-100', 'border-green-300');
+            
+            // Scroll to the TOC section's start page
+            const sectionPage = tocItem.dataset.sectionPage;
+            if (sectionPage && sectionPage !== '' && this.pdfDoc) {
+                const pageNumber = parseInt(sectionPage);
+                if (pageNumber > 0) {
+                    console.log(`Scrolling to TOC section "${section}" page ${pageNumber}`);
+                    this.scrollToPage(pageNumber);
+                }
+            }
         }
         
         this.updateChatMode();
@@ -470,16 +523,28 @@ class PDFChatApp {
     }
     
     toggleTOCSection(section, tocItem) {
-        const index = this.currentTOCSections.indexOf(section);
+        const currentIndex = this.currentTOCSections.indexOf(section);
         
-        if (index === -1) {
+        if (currentIndex === -1) {
             // Add section
             this.currentTOCSections.push(section);
             tocItem.classList.add('bg-green-100', 'border-green-300');
             this.currentMode = 'toc';
+            
+            // Scroll to the TOC section's start page if this is the first section being added
+            if (this.currentTOCSections.length === 1) {
+                const sectionPage = tocItem.dataset.sectionPage;
+                if (sectionPage && sectionPage !== '' && this.pdfDoc) {
+                    const pageNumber = parseInt(sectionPage);
+                    if (pageNumber > 0) {
+                        console.log(`Scrolling to TOC section "${section}" page ${pageNumber}`);
+                        this.scrollToPage(pageNumber);
+                    }
+                }
+            }
         } else {
             // Remove section
-            this.currentTOCSections.splice(index, 1);
+            this.currentTOCSections.splice(currentIndex, 1);
             tocItem.classList.remove('bg-green-100', 'border-green-300');
             
             // If no sections left, return to PDF mode
@@ -1286,7 +1351,7 @@ NY
             
             const result = await response.json();
             
-            // Hide typing indicator and add response
+            // Hide typing indicator and add the assistant's response
             this.hideTypingIndicator();
             this.addMessage(result.response, 'assistant', result.sources);
             
@@ -1360,13 +1425,79 @@ NY
         this.typingIndicator.classList.add('hidden');
     }
     
-    clearChat() {
-        this.chatMessages.innerHTML = `
-            <div class="chat-message bg-blue-50 p-3 rounded-lg mb-6">
-                <div class="text-sm text-blue-800 font-medium">Chat cleared!</div>
-                <div class="text-sm text-blue-600 mt-1">Start a new conversation.</div>
-            </div>
-        `;
+    async clearChat() {
+        if (!this.currentCollection) {
+            console.error('No collection selected');
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/clear-chat/${this.currentCollection}`, {
+                method: 'POST'
+            });
+            
+            if (response.ok) {
+                // Clear the visual interface
+                this.chatMessages.innerHTML = `
+                    <div class="chat-message bg-blue-50 p-3 rounded-lg mb-6">
+                        <div class="text-sm text-blue-800 font-medium">Chat cleared!</div>
+                        <div class="text-sm text-blue-600 mt-1">Start a new conversation.</div>
+                    </div>
+                `;
+                console.log('Chat history cleared successfully');
+            } else {
+                console.error('Failed to clear chat history');
+            }
+        } catch (error) {
+            console.error('Error clearing chat:', error);
+        }
+    }
+    
+    async loadChatHistory() {
+        if (!this.currentCollection) {
+            // No collection selected, show greeting
+            this.showInitialGreeting();
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/chat-history/${this.currentCollection}`);
+            const data = await response.json();
+            
+            console.log('Chat history loaded:', data.messages?.length, 'messages');
+            
+            if (data.messages && data.messages.length > 0) {
+                // Clear current messages
+                this.chatMessages.innerHTML = '';
+                
+                // Add each message from history
+                for (const message of data.messages) {
+                    if (message.type === 'user') {
+                        this.addMessage(message.content, 'user');
+                    } else if (message.type === 'assistant') {
+                        this.addMessage(message.content, 'assistant', message.sources);
+                    }
+                }
+            } else {
+                // No history, show welcome message
+                this.chatMessages.innerHTML = `
+                    <div class="text-gray-500 text-center py-8">
+                        No chat history. Start a conversation!
+                    </div>
+                `;
+            }
+            
+            // Scroll to bottom
+            this.scrollToBottom();
+            
+        } catch (error) {
+            console.error('Error loading chat history:', error);
+            this.chatMessages.innerHTML = `
+                <div class="text-red-500 text-center py-8">
+                    Error loading chat history
+                </div>
+            `;
+        }
     }
     
     scrollToBottom() {
@@ -1383,10 +1514,22 @@ NY
     formatMarkdown(text) {
         // Parse citations first and store them
         const parsedCitations = [];
-        const citationRegex = /<citation\s+pdf_name="([^"]+)"\s+page_number="([^"]+)"\s+chunk_id="([^"]+)"\s+cited_text="(.*?)">/g;
+        const doubleQuoteRegex = /<citation\s+pdf_name="([^"]+)"\s+page_number="([^"]+)"\s+chunk_id="([^"]+)"\s+cited_text="(.*?)">/g;
+        const singleQuoteRegex = /<citation\s+pdf_name='([^']+)'\s+page_number='([^']+)'\s+chunk_id='([^']+)'\s+cited_text='(.*?)'>/g;
         
         // Replace citations with unique placeholders and parse them immediately
-        let textWithPlaceholders = text.replace(citationRegex, (match) => {
+        let textWithPlaceholders = text;
+        
+        // Handle double quotes
+        textWithPlaceholders = textWithPlaceholders.replace(doubleQuoteRegex, (match) => {
+            const parsedCitation = this.parseCitations(match);
+            const placeholder = `CITATIONPLACEHOLDER${parsedCitations.length}CITATIONPLACEHOLDER`;
+            parsedCitations.push(parsedCitation);
+            return placeholder;
+        });
+        
+        // Handle single quotes
+        textWithPlaceholders = textWithPlaceholders.replace(singleQuoteRegex, (match) => {
             const parsedCitation = this.parseCitations(match);
             const placeholder = `CITATIONPLACEHOLDER${parsedCitations.length}CITATIONPLACEHOLDER`;
             parsedCitations.push(parsedCitation);
@@ -1425,24 +1568,79 @@ NY
     
     parseCitations(text) {
         // Parse citation tags and convert to clickable elements
-        // Updated regex to also capture cited_text field
-        const citationRegex = /<citation\s+pdf_name="([^"]+)"\s+page_number="([^"]+)"\s+chunk_id="([^"]+)"\s+cited_text="(.*?)">/g;
+        // Handle both single and double quotes, but consistently within each tag
+        const doubleQuoteRegex = /<citation\s+pdf_name="([^"]+)"\s+page_number="([^"]+)"\s+chunk_id="([^"]+)"\s+cited_text="(.*?)">/g;
+        const singleQuoteRegex = /<citation\s+pdf_name='([^']+)'\s+page_number='([^']+)'\s+chunk_id='([^']+)'\s+cited_text='(.*?)'>/g;
         
-        return text.replace(citationRegex, (_, pdfName, pageNumber, chunkId, citedText) => {
-            // Extract just the PDF filename without extension for display
-            let displayName = pdfName.replace(/\.pdf$/i, '');
-            
-            // Shorten long PDF names for more compact citation tags
-            if (displayName.length > 25) {
-                displayName = displayName.substring(0, 22) + '...';
-            }
-            
-            return `<span class="citation-tag" onclick="app.handleCitationClick('${pdfName}', ${pageNumber}, '${chunkId}', '${citedText.replace(/'/g, "\\'")})')" title="${pdfName.replace(/\.pdf$/i, '')}"><i class="fas fa-link"></i> ${displayName} p.${pageNumber}</span>`;
+        // Try double quotes first, then single quotes
+        let result = text.replace(doubleQuoteRegex, (_, pdfName, pageNumber, chunkId, citedText) => {
+            return this.createCitationSpan(pdfName, pageNumber, chunkId, citedText);
         });
+        
+        result = result.replace(singleQuoteRegex, (_, pdfName, pageNumber, chunkId, citedText) => {
+            return this.createCitationSpan(pdfName, pageNumber, chunkId, citedText);
+        });
+        
+        return result;
     }
+    
+    createCitationSpan(pdfName, pageNumber, chunkId, citedText) {
+        // Extract just the PDF filename without extension for display
+        let displayName = pdfName.replace(/\.pdf$/i, '');
+        
+        // Shorten long PDF names for more compact citation tags
+        if (displayName.length > 25) {
+            displayName = displayName.substring(0, 22) + '...';
+        }
+        
+        // Create tooltip with cited text if available
+        let titleAttribute = '';
+        if (citedText && citedText.trim()) {
+            let tooltipText = citedText.trim();
+            // Limit tooltip length and add ellipsis
+            if (tooltipText.length > 150) {
+                tooltipText = tooltipText.substring(0, 147) + '...';
+            } else {
+                tooltipText = tooltipText + '...';
+            }
+            // Escape quotes for HTML attribute
+            const escapedTooltipText = tooltipText.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+            titleAttribute = `title="${escapedTooltipText}"`;
+        }
+        
+        return `<span class="citation-tag" onclick="app.handleCitationClick('${pdfName}', ${pageNumber}, '${chunkId}', '${citedText.replace(/'/g, "\\'")})')" ${titleAttribute}><i class="fas fa-link"></i> ${displayName} p.${pageNumber}</span>`;
+    }
+    
     
     handleCitationClick(pdfName, pageNumber, chunkId, citedText = '') {
         console.log(`Citation clicked: ${pdfName}, page ${pageNumber}, chunk ${chunkId}`, citedText ? `cited text: ${citedText}` : '');
+        
+        // Add hearts animation if it's an anniversary
+        if (this.isAnniversary) {
+            // Get the citation element that was clicked
+            const citationElements = document.querySelectorAll('.citation-tag');
+            let clickedCitation = null;
+            
+            // Find which citation was clicked (this is a bit hacky but works)
+            citationElements.forEach(el => {
+                if (el.onclick && el.onclick.toString().includes(chunkId)) {
+                    clickedCitation = el;
+                }
+            });
+            
+            if (clickedCitation) {
+                const rect = clickedCitation.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                
+                // Create 3 hearts for citation clicks (fewer than send button)
+                for (let i = 0; i < 3; i++) {
+                    setTimeout(() => {
+                        this.createSingleHeart(centerX, centerY);
+                    }, i * 80);
+                }
+            }
+        }
         
         // Store the target page and cited text for after PDF loads
         this.pendingScrollPage = parseInt(pageNumber);
@@ -1648,8 +1846,6 @@ NY
                 }, 10000);
             } else {
                 console.warn('Could not find chunk text in PDF for highlighting');
-                // Show a message to the user
-                this.showTemporaryMessage('Chunk text not found for highlighting');
             }
             
         } catch (error) {
@@ -2088,6 +2284,12 @@ NY
         if (this.pageRangeDisplay) this.pageRangeDisplay.textContent = pageRange;
         if (this.currentPageRangeDiv) this.currentPageRangeDiv.classList.remove('hidden');
         
+        // Scroll to the start page of the range
+        if (this.pdfDoc && startPage > 0) {
+            console.log(`Scrolling to page range start: page ${startPage}`);
+            this.scrollToPage(startPage);
+        }
+        
         // Update chat mode
         this.updateChatMode();
         this.updateModeTooltip();
@@ -2120,6 +2322,353 @@ NY
         if (loadingDiv) {
             loadingDiv.remove();
         }
+    }
+    
+    checkBirthday() {
+        const today = new Date();
+        const month = today.getMonth() + 1; // January is 0
+        const day = today.getDate();
+        
+        // Check for birthday (October 8th = 10/8, but testing with September 5th = 9/5)
+        if (month === 10 && day === 8) {
+            this.isBirthday = true;
+            this.showBirthdayPopup();
+        } else {
+            this.isBirthday = false;
+        }
+        
+        // Check for anniversary (June 7, 2025 - 7th of every month)
+        if (day === 7) {
+            this.isAnniversary = true;
+            this.showAnniversaryPopup();
+        } else {
+            this.isAnniversary = false;
+        }
+    }
+    
+    showBirthdayPopup() {
+        // Create birthday popup overlay
+        const overlay = document.createElement('div');
+        overlay.id = 'birthday-overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+            backdrop-filter: blur(5px);
+        `;
+        
+        // Create birthday popup
+        const popup = document.createElement('div');
+        popup.style.cssText = `
+            background: linear-gradient(135deg, #ff6b9d, #ff8fab, #ffa8cc);
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(255, 107, 157, 0.3);
+            animation: birthdayBounce 0.8s ease-out;
+            max-width: 400px;
+            position: relative;
+        `;
+        
+        popup.innerHTML = `
+            <div style="font-size: 48px; margin-bottom: 20px; animation: heartFloat 2s ease-in-out infinite;">
+                💖✨💖
+            </div>
+            <h2 style="color: white; font-size: 32px; margin: 0 0 10px 0; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); font-weight: bold;">
+                Happy Birthday Kris!
+            </h2>
+            <p style="color: white; font-size: 18px; margin: 20px 0; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+                🎉 I like you 🎂
+            </p>
+            <button id="birthday-close" style="
+                background: white;
+                color: #ff6b9d;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 25px;
+                font-size: 16px;
+                font-weight: bold;
+                cursor: pointer;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                transition: all 0.3s ease;
+            ">
+                Close 💕
+            </button>
+        `;
+        
+        overlay.appendChild(popup);
+        document.body.appendChild(overlay);
+        
+        // Add CSS animations
+        if (!document.getElementById('birthday-styles')) {
+            const style = document.createElement('style');
+            style.id = 'birthday-styles';
+            style.textContent = `
+                @keyframes birthdayBounce {
+                    0% { transform: scale(0.3) rotate(-10deg); opacity: 0; }
+                    50% { transform: scale(1.05) rotate(5deg); }
+                    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+                }
+                
+                @keyframes heartFloat {
+                    0%, 100% { transform: translateY(0px); }
+                    50% { transform: translateY(-10px); }
+                }
+                
+                @keyframes fadeOut {
+                    0% { opacity: 1; }
+                    100% { opacity: 0; }
+                }
+                
+                @keyframes popupFadeOut {
+                    0% { opacity: 1; transform: scale(1); }
+                    100% { opacity: 0; transform: scale(0.8); }
+                }
+                
+                #birthday-close:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 6px 12px rgba(0,0,0,0.3);
+                    background: #fff5f8;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // Close popup functionality
+        document.getElementById('birthday-close').addEventListener('click', () => {
+            overlay.style.animation = 'fadeOut 0.3s ease-out forwards';
+            popup.style.animation = 'popupFadeOut 0.3s ease-out forwards';
+            setTimeout(() => overlay.remove(), 300);
+        });
+        
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.style.animation = 'fadeOut 0.3s ease-out forwards';
+                popup.style.animation = 'popupFadeOut 0.3s ease-out forwards';
+                setTimeout(() => overlay.remove(), 300);
+            }
+        });
+        
+        // Auto-close after 10 seconds
+        setTimeout(() => {
+            if (document.getElementById('birthday-overlay')) {
+                overlay.style.animation = 'fadeOut 0.3s ease-out forwards';
+                popup.style.animation = 'popupFadeOut 0.3s ease-out forwards';
+                setTimeout(() => overlay.remove(), 300);
+            }
+        }, 10000);
+    }
+    
+    createHeartsFromButton() {
+        if (!this.sendButton) return;
+        
+        // Get button position
+        const buttonRect = this.sendButton.getBoundingClientRect();
+        const buttonCenterX = buttonRect.left + buttonRect.width / 2;
+        const buttonCenterY = buttonRect.top + buttonRect.height / 2;
+        
+        // Create multiple hearts
+        for (let i = 0; i < 6; i++) {
+            setTimeout(() => {
+                this.createSingleHeart(buttonCenterX, buttonCenterY);
+            }, i * 100); // Stagger the hearts
+        }
+    }
+    
+    createSingleHeart(startX, startY) {
+        const heart = document.createElement('div');
+        heart.innerHTML = '💖';
+        heart.style.cssText = `
+            position: fixed;
+            left: ${startX}px;
+            top: ${startY}px;
+            font-size: 20px;
+            pointer-events: none;
+            z-index: 9999;
+            animation: heartFlyUp 2s ease-out forwards;
+        `;
+        
+        // Add random horizontal movement
+        const randomX = (Math.random() - 0.5) * 200; // -100px to +100px
+        heart.style.setProperty('--random-x', `${randomX}px`);
+        
+        document.body.appendChild(heart);
+        
+        // Add the flying animation if not already added
+        if (!document.getElementById('heart-fly-styles')) {
+            const style = document.createElement('style');
+            style.id = 'heart-fly-styles';
+            style.textContent = `
+                @keyframes heartFlyUp {
+                    0% {
+                        transform: translate(0, 0) scale(0.5);
+                        opacity: 1;
+                    }
+                    50% {
+                        transform: translate(var(--random-x), -150px) scale(1);
+                        opacity: 1;
+                    }
+                    100% {
+                        transform: translate(var(--random-x), -250px) scale(0.3);
+                        opacity: 0;
+                    }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // Remove heart after animation
+        setTimeout(() => {
+            if (heart.parentNode) {
+                heart.remove();
+            }
+        }, 2000);
+    }
+    
+    showAnniversaryPopup() {
+        const today = new Date();
+        const startDate = new Date(2025, 5, 7); // June 7, 2025 (month is 0-indexed)
+        
+        // Calculate months since we started dating
+        let months = (today.getFullYear() - startDate.getFullYear()) * 12;
+        months += today.getMonth() - startDate.getMonth();
+        
+        // If we haven't reached the anniversary day yet this month, subtract 1
+        if (today.getDate() < startDate.getDate()) {
+            months--;
+        }
+        
+        // Only show if it's been at least 1 month
+        if (months < 1) return;
+        
+        // Create anniversary popup overlay
+        const overlay = document.createElement('div');
+        overlay.id = 'anniversary-overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+            backdrop-filter: blur(5px);
+        `;
+        
+        // Create anniversary popup
+        const popup = document.createElement('div');
+        popup.style.cssText = `
+            background: linear-gradient(135deg, #ffd700, #ffb347, #ff69b4);
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(255, 215, 0, 0.3);
+            animation: anniversaryBounce 0.8s ease-out;
+            max-width: 400px;
+            position: relative;
+        `;
+        
+        const monthText = months === 1 ? "1 month" : `${months} months`;
+        
+        popup.innerHTML = `
+            <div style="font-size: 48px; margin-bottom: 20px; animation: sparkleFloat 2s ease-in-out infinite;">
+                ✨💕✨
+            </div>
+            <h2 style="color: white; font-size: 28px; margin: 0 0 10px 0; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); font-weight: bold;">
+                Happy ${monthText} Anniversary!
+            </h2>
+            <p style="color: white; font-size: 18px; margin: 20px 0; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+                🌟 U are pretty cool 💫
+            </p>
+            <button id="anniversary-close" style="
+                background: white;
+                color: #ffd700;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 25px;
+                font-size: 16px;
+                font-weight: bold;
+                cursor: pointer;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                transition: all 0.3s ease;
+            ">
+                Close ✨
+            </button>
+        `;
+        
+        overlay.appendChild(popup);
+        document.body.appendChild(overlay);
+        
+        // Add CSS animations for anniversary
+        if (!document.getElementById('anniversary-styles')) {
+            const style = document.createElement('style');
+            style.id = 'anniversary-styles';
+            style.textContent = `
+                @keyframes anniversaryBounce {
+                    0% { transform: scale(0.3) rotate(-10deg); opacity: 0; }
+                    50% { transform: scale(1.05) rotate(5deg); }
+                    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+                }
+                
+                @keyframes sparkleFloat {
+                    0%, 100% { transform: translateY(0px) rotate(0deg); }
+                    50% { transform: translateY(-10px) rotate(180deg); }
+                }
+                
+                @keyframes anniversaryFadeOut {
+                    0% { opacity: 1; }
+                    100% { opacity: 0; }
+                }
+                
+                @keyframes anniversaryPopupFadeOut {
+                    0% { opacity: 1; transform: scale(1); }
+                    100% { opacity: 0; transform: scale(0.8); }
+                }
+                
+                #anniversary-close:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 6px 12px rgba(0,0,0,0.3);
+                    background: #fff9e6;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // Close popup functionality
+        document.getElementById('anniversary-close').addEventListener('click', () => {
+            overlay.style.animation = 'anniversaryFadeOut 0.3s ease-out forwards';
+            popup.style.animation = 'anniversaryPopupFadeOut 0.3s ease-out forwards';
+            setTimeout(() => overlay.remove(), 300);
+        });
+        
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.style.animation = 'anniversaryFadeOut 0.3s ease-out forwards';
+                popup.style.animation = 'anniversaryPopupFadeOut 0.3s ease-out forwards';
+                setTimeout(() => overlay.remove(), 300);
+            }
+        });
+        
+        // Auto-close after 12 seconds (a bit longer for anniversary)
+        setTimeout(() => {
+            if (document.getElementById('anniversary-overlay')) {
+                overlay.style.animation = 'anniversaryFadeOut 0.3s ease-out forwards';
+                popup.style.animation = 'anniversaryPopupFadeOut 0.3s ease-out forwards';
+                setTimeout(() => overlay.remove(), 300);
+            }
+        }, 12000);
     }
 }
 

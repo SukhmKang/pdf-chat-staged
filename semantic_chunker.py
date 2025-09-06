@@ -550,13 +550,16 @@ class SemanticChunker:
         """Create a semantic page from a section with text blocks."""
         blocks = section["blocks"]
         
-        # Combine all content with smart paragraph splitting and preserve bounding box mapping
+        # Build a mapping of sentences to their source blocks
+        sentence_to_block_map = []  # List of (sentence, block_page_number) tuples
         full_content = ""
         page_numbers = set()
-        content_bbox_map = []  # List of (start_char, end_char, bbox_data) tuples
         
         for block in blocks:
             block_content = block["content"]
+            block_page = block.get("page_number", 1)
+            page_numbers.add(block_page)
+            
             content_start = len(full_content)
             
             # If this is a very long paragraph from PyPDF2, try to split it intelligently
@@ -572,14 +575,7 @@ class SemanticChunker:
                     full_content += segment
                     segment_end = len(full_content)
                     
-                    # Store bounding box mapping for this segment
-                    if "bbox" in block:
-                        content_bbox_map.append({
-                            "start_char": segment_start,
-                            "end_char": segment_end,
-                            "bbox": block["bbox"],
-                            "page_number": block.get("page_number", 1)
-                        })
+                    # We'll use the source blocks directly for page mapping
             else:
                 if full_content:
                     full_content += "\n\n"
@@ -587,19 +583,13 @@ class SemanticChunker:
                 full_content += block_content
                 content_end = len(full_content)
                 
-                # Store bounding box mapping for this block
-                if "bbox" in block:
-                    content_bbox_map.append({
-                        "start_char": content_start,
-                        "end_char": content_end,
-                        "bbox": block["bbox"],
-                        "page_number": block.get("page_number", 1)
-                    })
+                # We'll use the source blocks directly for page mapping
             
-            page_numbers.add(block.get("page_number", 1))
+            page_number = block.get("page_number", 1)
+            page_numbers.add(page_number)
         
-        # Create child chunks
-        child_chunks = self._create_child_chunks(full_content, section["title"], list(page_numbers))
+        # Create child chunks - pass the blocks for accurate page mapping
+        child_chunks = self._create_child_chunks(full_content, section["title"], list(page_numbers), blocks)
         
         # Create parent chunks from child chunks
         parent_chunks = self._create_parent_chunks(child_chunks, section["title"])
@@ -638,7 +628,7 @@ class SemanticChunker:
         page_numbers = [table_block.get("page_number", 1)]
         
         # Create child chunks (tables usually fit in one chunk)
-        child_chunks = self._create_child_chunks(content, section["title"], page_numbers)
+        child_chunks = self._create_child_chunks(content, section["title"], page_numbers, [])
         
         # Parent chunk is the same as child for standalone tables
         parent_chunks = self._create_parent_chunks(child_chunks, section["title"])
@@ -706,7 +696,7 @@ class SemanticChunker:
         page_numbers = [figure_block.get("page_number", 1)]
         
         # Create child chunks
-        child_chunks = self._create_child_chunks(content, section["title"], page_numbers)
+        child_chunks = self._create_child_chunks(content, section["title"], page_numbers, [])
         
         # Parent chunk is the same as child for standalone figures
         parent_chunks = self._create_parent_chunks(child_chunks, section["title"])
@@ -842,7 +832,7 @@ class SemanticChunker:
             print(f"Warning: Could not extract figure image: {e}")
             return None
     
-    def _create_child_chunks(self, content: str, section_title: str, page_numbers: List[int]) -> List[Chunk]:
+    def _create_child_chunks(self, content: str, section_title: str, page_numbers: List[int], source_blocks: List[Dict] = None) -> List[Chunk]:
         """Create child chunks of 180-350 tokens with 15-20% overlap."""
         child_chunks = []
         
@@ -880,7 +870,7 @@ class SemanticChunker:
                         content=current_chunk.strip(),
                         token_count=current_tokens,
                         section_title=section_title,
-                        page_number=page_numbers[0] if page_numbers else 1,
+                        page_number=self._find_chunk_page_number_from_blocks(current_chunk.strip(), source_blocks, page_numbers),
                         chunk_index=chunk_index,
                         metadata={"page_numbers": page_numbers}
                     )
@@ -913,7 +903,7 @@ class SemanticChunker:
                 content=current_chunk.strip(),
                 token_count=current_tokens,
                 section_title=section_title,
-                page_number=page_numbers[0] if page_numbers else 1,
+                page_number=self._find_chunk_page_number_from_blocks(current_chunk.strip(), source_blocks, page_numbers),
                 chunk_index=chunk_index,
                 metadata={"page_numbers": page_numbers}
             )
@@ -1004,6 +994,45 @@ class SemanticChunker:
             parent_chunks.append(chunk)
         
         return parent_chunks
+    
+    def _find_chunk_page_number_from_blocks(self, chunk_text: str, source_blocks: List[Dict], fallback_pages: List[int]) -> int:
+        """Determine the correct page number by finding which block contains the chunk text."""
+        if not source_blocks or not chunk_text.strip():
+            return fallback_pages[0] if fallback_pages else 1
+        
+        # Use the first 50-100 words as a signature to identify the source block
+        chunk_words = chunk_text.strip().split()
+        if len(chunk_words) > 20:
+            search_text = " ".join(chunk_words[:20])  # First 20 words
+        else:
+            search_text = chunk_text.strip()
+        
+        # Clean search text for better matching
+        search_text = " ".join(search_text.split())  # Normalize whitespace
+        
+        # Find which block contains this text
+        for block in source_blocks:
+            block_content = block.get("content", "")
+            # Normalize block content whitespace too
+            normalized_block = " ".join(block_content.split())
+            
+            if search_text in normalized_block:
+                return block.get("page_number", 1)
+        
+        # If no exact match, try with shorter text (first 10 words)
+        if len(chunk_words) > 10:
+            shorter_search = " ".join(chunk_words[:10])
+            shorter_search = " ".join(shorter_search.split())
+            
+            for block in source_blocks:
+                block_content = block.get("content", "")
+                normalized_block = " ".join(block_content.split())
+                
+                if shorter_search in normalized_block:
+                    return block.get("page_number", 1)
+        
+        # Fallback to first page in the section
+        return fallback_pages[0] if fallback_pages else 1
     
     def _split_into_sentences(self, text: str) -> List[str]:
         """Split text into sentences for better chunking boundaries."""
@@ -1118,7 +1147,7 @@ def main():
         total_figures = chunking_info['page_types'].get('figure', 0)
         print(f"  Figures with AI analysis: {figures_with_ai}/{total_figures}")
         
-    except Exception as e:
+    except Exception:
         print(f"Error processing semantic chunks: {traceback.format_exc()}")
         return 1
     

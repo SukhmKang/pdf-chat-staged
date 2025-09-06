@@ -48,6 +48,7 @@ import argparse
 import json
 import base64
 import tiktoken
+import random
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
@@ -126,6 +127,7 @@ class PDFChatSession:
         # Current chat context
         self.current_context = {
             "mode": "collection",
+            "collection_name": collection_name,
             "pdf_filenames": None,
             "toc_sections": None,  # Changed from toc_section to toc_sections (array)
             "page_range": None,
@@ -151,6 +153,21 @@ class PDFChatSession:
         else:
             # Rough estimation for standard mode
             return len(text.split()) * 1.3
+    
+    def _add_random_cute_message(self, response: str) -> str:
+        """Easter egg: randomly append a cute message from Sukhm (5% chance)."""
+        if random.random() < 0.05:  # 5% chance
+            cute_messages = [
+                "\n\nBy the way, you're super cute :) - Sukhm",
+                "\n\nBy the way, you're really pretty - Sukhm", 
+                "\n\nBy the way, you're the best Kristin - Sukhm",
+                "\n\nBy the way, you're lovely :) - Sukhm",
+                "\n\nBy the way, you're amazing - Sukhm",
+                "\n\nBy the way, nice job on all your hard work... remember to take a break, okay? - Sukhm"
+            ]
+            selected_message = random.choice(cute_messages)
+            return response + selected_message
+        return response
     
     def _load_history(self) -> List[Dict[str, Any]]:
         """Load conversation history from file."""
@@ -520,12 +537,34 @@ Fixed question:"""
     
     def _build_standard_context_prompt(self, question: str, retrieved_chunks: List[Dict[str, Any]]) -> str:
         """Build context prompt for standard mode."""
-        # Build conversation context from recent history
+        # Build conversation context from recent history (same collection only, not cleared)
         recent_history = []
-        for turn in self.conversation_history[-5:]:  # Last 5 turns
-            if turn["context"]["mode"] == self.current_context["mode"]:
-                recent_history.append(f"Human: {turn['user_message']}")
-                recent_history.append(f"Assistant: {turn['assistant_response']}")
+        # Filter to same collection and mode first, then take last 5
+        collection_history = [
+            turn for turn in self.conversation_history
+            if (turn["context"].get("collection_name") == self.current_context["collection_name"] and
+                not turn.get("is_cleared", False))
+        ]
+        
+        # Auto-compact conversation history if it's getting too long
+        collection_history = self._get_compacted_history(collection_history)
+        
+        # Take the last 5 turns from the collection-specific history
+        for turn in collection_history[-5:]:
+            recent_history.append(f"Human: {turn['user_message']}")
+            recent_history.append(f"Assistant: {turn['assistant_response']}")
+        
+        # Debug output
+        total_turns = len(self.conversation_history)
+        collection_turns = len(collection_history)
+        included_turns = len(recent_history) // 2  # Divide by 2 since each turn has Human + Assistant
+        print(f"🧠 Chat History: {included_turns} turns included from {collection_turns} collection turns ({total_turns} total) (collection: {self.current_context['collection_name']}, mode: {self.current_context['mode']})")
+        if recent_history:
+            # Show abbreviated version of most recent turn
+            last_human = recent_history[-2] if len(recent_history) >= 2 else ""
+            last_assistant = recent_history[-1] if recent_history else ""
+            print(f"   Last turn - Human: \"{last_human[:50]}{'...' if len(last_human) > 50 else ''}\"")
+            print(f"   Last turn - Assistant: \"{last_assistant[:50]}{'...' if len(last_assistant) > 50 else ''}\"")
         
         conversation_context = "\n".join(recent_history) if recent_history else "This is the start of our conversation."
         
@@ -539,32 +578,23 @@ Fixed question:"""
             content_context = "No specific relevant content was found in the documents."
         
         # Build system prompt
-        system_prompt = f"""You are a helpful AI assistant that answers questions about PDF documents using retrieved content. 
+        system_prompt = f"""You are a helpful AI assistant in an app that answers questions about PDF documents using retrieved content. 
 
 Current Context: {self.current_context['description']}
 
 Instructions:
-1. Answer the user's question based primarily on the retrieved content below
-2. Be conversational and natural, referencing our previous discussion when relevant
-3. If the retrieved content doesn't contain enough information, say so clearly
-4. ALWAYS include citation tags when referencing information from sources
-5. Be concise but thorough
-6. If asked about topics not in the retrieved content, politely explain the limitation
+1. Answer based on the retrieved content below and previous conversation context
+2. Include citations for all source references using this exact format: <citation pdf_name="file.pdf" page_number="123" chunk_id="id" cited_text="first 5-7 words...">
+3. Citation tags are INVISIBLE to users - put all visible text OUTSIDE the tags
+4. Say clearly if the content doesn't address the question
 
-CITATION FORMAT: When referencing information from the retrieved content, you MUST include citation tags in this exact format:
-<citation pdf_name="filename.pdf" page_number="123" chunk_id="chunk_identifier" cited_text="By 1999 NATO was...">
+Citation Examples:
+✓ GOOD: The author argues that life is absurd <citation pdf_name="nagel.pdf" page_number="4" chunk_id="abc123" cited_text="Nothing we do now...">.
+✗ WRONG: The author argues that <citation cited_text="life is absurd because nothing matters in the long run">.
 
-For example: "The alliance expanded significantly in the 1990s <citation pdf_name="ShieldsOfTheRepublic.pdf" page_number="92" chunk_id="child_ShieldsOfTheRepublic_120" cited_text="By 1999 NATO was...">."
-cited_text should be the first few words of the quote from the chunk where you got the bulk of your information.
+The wrong example would display as "The author argues that." to users since citation content is hidden.
 
-IMPORTANT: You must respond in JSON format with exactly this structure:
-{{
-  "found_answer": true/false,
-  "confidence": "high/medium/low", 
-  "response": "your detailed response here with <citation> tags"
-}}
-
-Set "found_answer" to true if you can provide a substantive answer based on the retrieved content, false if the content doesn't contain relevant information for the question. Set "confidence" based on how well the retrieved content addresses the question.
+Current Context: {self.current_context['description']}
 
 Previous Conversation:
 {conversation_context}
@@ -572,9 +602,19 @@ Previous Conversation:
 Retrieved Content:
 {content_context}
 
-User Question: {question}
+REQUIRED JSON RESPONSE FORMAT:
+{{
+  "found_answer": true/false,
+  "confidence": "high/medium/low", 
+  "response": "your detailed response with proper citations"
+}}
 
-Please provide a helpful response based on the retrieved content and our conversation context."""
+Set "found_answer" based on whether the retrieved content can substantively address the question. Set "confidence" based on how well the content matches the question.
+
+User Question: {question}"""
+
+        print("system prompt")
+        print(system_prompt)
         
         return system_prompt
     
@@ -998,11 +1038,23 @@ VERBOSITY LEVEL: {verbosity.upper()}
 - Low: Provide concise, direct answers focused on essential information only
 
 YOUR TASK:
-Create a synthesized answer that combines the best aspects of both approaches. Your response should:
-1. Use proper markdown formatting (headers, lists, bold, italic, code blocks, etc.) to structure your answer clearly. If the original answers don't use markdown formatting, add it in.
-2. Include the most relevant and accurate information from both responses  
-3. Maintain all citation tags in the exact format: <citation pdf_name="filename.pdf" page_number="123" chunk_id="chunk_identifier" cited_text="Insert text here...">
-4. Adjust the length and detail level according to the {verbosity} verbosity setting above
+Create a synthesized answer that combines the best aspects of both approaches.
+1. Use proper markdown formatting (headers, lists, bold, italic, code blocks, etc.) to structure your answer clearly.
+2. Maintain all citation tags in the exact format: <citation pdf_name="filename.pdf" page_number="123" chunk_id="chunk_identifier" cited_text="first few words only...">. Fix any citation formatting errors that you notice.
+3. Adjust the length and detail level according to the {verbosity} verbosity setting above
+
+CRITICAL CITATION FORMATTING RULES:
+- Citation tags are INVISIBLE to users - anything you want the user to see must be OUTSIDE the citation tags
+- The cited_text attribute should contain ONLY the first 5-7 words of the referenced text
+- NEVER put full quotes, sentences, or explanations inside citation tags
+- You can PARAPHRASE or directly quote - both are fine, just cite properly
+- Place citation tags at the end of sentences
+
+Examples:
+PARAPHRASING: Nagel argues that human existence lacks ultimate meaning <citation pdf_name="nagel.pdf" page_number="4" chunk_id="abc123" cited_text="nothing we do now...">.
+DIRECT QUOTE: "Nothing we do now will matter in a million years" <citation pdf_name="nagel.pdf" page_number="4" chunk_id="abc123" cited_text="Nothing we do now...">.
+
+WRONG: <citation cited_text="Nothing we do now will matter in a million years, but if that is true...">
 
 ORIGINAL QUESTION: {question}
 
@@ -1012,10 +1064,13 @@ APPROACH 1:
 APPROACH 2:
 {non_toc_answer_data['response']}
 
+REMINDER: Citation tags must be properly closed and contain only short reference text. Correct format:
+<citation pdf_name="file.pdf" page_number="1" chunk_id="abc123" cited_text="first few words">
+
 Provide your synthesized response in JSON format:
 {{
   "synthesis_rationale": "Brief explanation of how you combined the responses",
-  "synthesized_response": "Your combined response with all citation tags preserved",
+  "synthesized_response": "Your combined response with all citation tags preserved and properly closed with >",
   "confidence": "high/medium/low",
   "primary_source": "approach_1/approach_2/balanced" 
 }}"""
@@ -1162,6 +1217,43 @@ Provide your synthesized response in JSON format:
                         print(f"⚠️  Claude API error, retrying (attempt {attempt + 1}/3): {e}")
                         continue
 
+    def _make_text_completion(self, model: str, messages: list, max_tokens: int = 4000) -> str:
+        """
+        Make a text completion request without JSON formatting.
+        
+        Args:
+            model: Model name ("gpt-5" or "gpt-4o" or "claude")
+            messages: List of message dictionaries
+            max_tokens: Maximum tokens for response
+            
+        Returns:
+            Plain text response
+        """
+        if model == "gpt-5":
+            max_tokens = 15000
+            return self.openai_client.chat.completions.create(
+                model="gpt-5",
+                messages=messages,
+                max_completion_tokens=max_tokens
+            ).choices[0].message.content.strip()
+        elif "gpt-4" in model:
+            max_tokens = 10000
+            return self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.7
+            ).choices[0].message.content.strip()
+        else:
+            # Claude - simple text completion
+            max_tokens = 10000
+            response_text = self.anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=max_tokens,
+                messages=messages
+            ).content[0].text
+            return response_text.strip()
+
     
     def ask_question(self, question: str, model: str = "gpt-5", verbosity: str = "medium") -> str:
         """
@@ -1211,6 +1303,9 @@ Provide your synthesized response in JSON format:
                 print(f"🔄 Synthesis failed, used fallback: {combined_stats['synthesis_fallback']} {confidence_emoji}")
             else:
                 print(f"✨ Synthesis complete - {primary_source.upper()} approach {confidence_emoji}")
+            
+            # Easter egg: randomly append a cute message from Sukhm
+            synthesized_response = self._add_random_cute_message(synthesized_response)
                 
             return synthesized_response
             
@@ -1226,8 +1321,19 @@ Provide your synthesized response in JSON format:
         
         relevant_history = [
             turn for turn in self.conversation_history
-            if turn["context"]["mode"] == self.current_context["mode"]
+            if (turn["context"]["mode"] == self.current_context["mode"] and
+                turn["context"].get("collection_name") == self.current_context["collection_name"] and
+                not turn.get("is_cleared", False))
         ]
+        
+        # Debug output for enhanced mode
+        total_turns = len(self.conversation_history)
+        relevant_turns = len(relevant_history)
+        print(f"🧠 Enhanced Chat History: {relevant_turns} collection turns from {total_turns} total (collection: {self.current_context['collection_name']}, mode: {self.current_context['mode']})")
+        if relevant_history:
+            last_turn = relevant_history[-1]
+            print(f"   Last relevant - Human: \"{last_turn['user_message'][:50]}{'...' if len(last_turn['user_message']) > 50 else ''}\"")
+            print(f"   Last relevant - Assistant: \"{last_turn['assistant_response'][:50]}{'...' if len(last_turn['assistant_response']) > 50 else ''}\"")
         
         conversation_parts = []
         current_tokens = 0
@@ -1319,6 +1425,203 @@ Provide your synthesized response in JSON format:
             self.current_context["description"] = f"Entire collection '{self.collection_name}'"
         
         print(f"🎯 Chat mode: {self.current_context['description']}")
+    
+    def get_chat_history_for_collection(self) -> List[Dict[str, Any]]:
+        """Get chat history for the current collection that isn't cleared."""
+        collection_messages = []
+        for message_pair in self.conversation_history:
+            if (message_pair.get("context", {}).get("collection_name") == self.collection_name and 
+                not message_pair.get("is_cleared", False) and not message_pair.get("is_summary", False)):
+                
+                # Add user message
+                if message_pair.get("user_message"):
+                    collection_messages.append({
+                        "type": "user",
+                        "content": message_pair.get("user_message"),
+                        "timestamp": message_pair.get("timestamp")
+                    })
+                
+                # Add assistant response
+                if message_pair.get("assistant_response"):
+                    collection_messages.append({
+                        "type": "assistant", 
+                        "content": message_pair.get("assistant_response"),
+                        "timestamp": message_pair.get("timestamp"),
+                        "sources": message_pair.get("retrieved_chunks", [])
+                    })
+        
+        return collection_messages
+    
+    def clear_chat_history_for_collection(self) -> int:
+        """Mark chat history as cleared for the current collection. Returns number of messages cleared."""
+        cleared_count = 0
+        for message_pair in self.conversation_history:
+            if message_pair.get("context", {}).get("collection_name") == self.collection_name:
+                message_pair["is_cleared"] = True
+                cleared_count += 1
+        
+        # Save updated history
+        self._save_history()
+        
+        print(f"🧹 Marked {cleared_count} message pairs as cleared for collection: {self.collection_name}")
+        return cleared_count
+    
+    def _get_compacted_history(self, collection_history: List[Dict]) -> List[Dict]:
+        """Smart compaction that only summarizes when needed and persists summaries."""
+        # Calculate total tokens in conversation history
+        total_tokens = self._calculate_history_tokens(collection_history)
+        print("total tokens of conversation history", total_tokens)
+        
+        # Token threshold for triggering compaction (roughly 8000 tokens)
+        TOKEN_THRESHOLD = 8000
+        
+        if total_tokens <= TOKEN_THRESHOLD:
+            return collection_history
+        
+        # Check if we already have a recent summary by looking at recent portion
+        recent_tokens = 0
+        recent_count = 0
+        for turn in reversed(collection_history):
+            turn_tokens = self._calculate_turn_tokens(turn)
+            recent_tokens += turn_tokens
+            recent_count += 1
+            if recent_tokens >= 2000:  # Check last ~2000 tokens for recent summary
+                break
+        
+        has_recent_summary = any(turn.get("is_summary", False) for turn in collection_history[-recent_count:])
+        
+        if has_recent_summary:
+            # We already have a summary in recent history, no need to re-summarize
+            return collection_history
+        
+        # Check if there are enough new tokens since last summary to warrant new summarization  
+        last_summary_idx = None
+        for i, turn in enumerate(collection_history):
+            if turn.get("is_summary", False):
+                last_summary_idx = i
+        
+        if last_summary_idx is not None:
+            # Count new tokens since last summary
+            new_turns = collection_history[last_summary_idx + 1:]
+            new_tokens = self._calculate_history_tokens(new_turns)
+            if new_tokens < 3000:  # Not enough new content to summarize again
+                return collection_history
+        
+        # Perform compaction
+        return self._create_conversation_summary(collection_history)
+    
+    def _calculate_history_tokens(self, history: List[Dict]) -> int:
+        """Calculate total tokens for a list of conversation turns."""
+        total_tokens = 0
+        for turn in history:
+            total_tokens += self._calculate_turn_tokens(turn)
+        return total_tokens
+    
+    def _calculate_turn_tokens(self, turn: Dict) -> int:
+        """Calculate tokens for a single conversation turn."""
+        user_msg = turn.get("user_message", "")
+        assistant_msg = turn.get("assistant_response", "")
+        return self._count_tokens(user_msg + assistant_msg)
+    
+    def _create_conversation_summary(self, conversation_history: List[Dict]) -> List[Dict]:
+        """Create a summary of older conversation turns."""
+        try:
+            # Keep recent turns that total around 2000 tokens, summarize older ones
+            recent_turns = []
+            recent_tokens = 0
+            target_recent_tokens = 2000
+            
+            for turn in reversed(conversation_history):
+                turn_tokens = self._calculate_turn_tokens(turn)
+                if recent_tokens + turn_tokens <= target_recent_tokens or len(recent_turns) == 0:
+                    recent_turns.insert(0, turn)
+                    recent_tokens += turn_tokens
+                else:
+                    break
+            
+            # Everything else goes to older_turns
+            recent_count = len(recent_turns)
+            older_turns = conversation_history[:-recent_count] if recent_count > 0 else conversation_history
+            
+            # Skip turns that are already summaries
+            turns_to_summarize = [turn for turn in older_turns if not turn.get("is_summary", False)]
+            
+            if len(turns_to_summarize) < 2:  # Not enough to summarize (reduced from 3)
+                return conversation_history
+            
+            # Build conversation text for summarization
+            conversation_text = ""
+            topic_keywords = set()
+            for turn in turns_to_summarize:
+                conversation_text += f"Human: {turn['user_message']}\n"
+                conversation_text += f"Assistant: {turn['assistant_response']}\n\n"
+                # Extract potential topic words for better summary
+                words = turn['user_message'].lower().split()
+                topic_keywords.update(word for word in words if len(word) > 4)
+            
+            # Create summarization prompt
+            summary_prompt = f"""Summarize this conversation history, focusing on:
+1. Main topics discussed: {', '.join(list(topic_keywords)[:10])}
+2. Key arguments, conclusions, and insights
+3. Important context for future questions
+
+Keep the summary concise (5-6 sentences) but informative enough to maintain conversation continuity.
+
+Conversation:
+{conversation_text}"""
+
+            # Use LLM to create summary (plain text, not JSON)
+            messages = [{"role": "user", "content": summary_prompt}]
+            summary = self._make_text_completion("gpt-4o", messages, 300)
+            
+            # Create summary entry with timestamp of the oldest summarized message
+            summary_entry = {
+                "timestamp": turns_to_summarize[0]["timestamp"], 
+                "context": self.current_context.copy(),
+                "user_message": f"[Summary of {len(turns_to_summarize)} earlier messages]",
+                "assistant_response": summary,
+                "retrieved_chunks": 0,
+                "enhanced_mode": False,
+                "is_summary": True,
+                "summarized_count": len(turns_to_summarize)
+            }
+            
+            # Keep any existing summaries + new summary + recent turns
+            existing_summaries = [turn for turn in older_turns if turn.get("is_summary", False)]
+            compacted = existing_summaries + [summary_entry] + recent_turns
+            
+            # Update the persistent conversation history
+            self._update_summarized_history(turns_to_summarize, summary_entry)
+            
+            print(f"🗜️ Summarized {len(turns_to_summarize)} turns. History now: {len(compacted)} entries")
+            return compacted
+            
+        except Exception as e:
+            print(f"⚠️ Failed to create conversation summary: {e}")
+            # Fallback: keep recent turns up to ~2000 tokens
+            fallback_turns = []
+            fallback_tokens = 0
+            for turn in reversed(conversation_history):
+                turn_tokens = self._calculate_turn_tokens(turn)
+                if fallback_tokens + turn_tokens <= 2000 or len(fallback_turns) == 0:
+                    fallback_turns.insert(0, turn)
+                    fallback_tokens += turn_tokens
+                else:
+                    break
+            return fallback_turns
+    
+    def _update_summarized_history(self, summarized_turns: List[Dict], summary_entry: Dict):
+        """Mark the summarized turns in the persistent history and add summary."""
+        # Mark original turns as summarized (don't delete them, just mark them)
+        for turn in self.conversation_history:
+            for summarized_turn in summarized_turns:
+                if (turn.get("timestamp") == summarized_turn.get("timestamp") and
+                    turn.get("user_message") == summarized_turn.get("user_message")):
+                    turn["is_summarized"] = True
+        
+        # Add the summary entry to persistent history
+        self.conversation_history.append(summary_entry)
+        self._save_history()
     
     def show_context_info(self) -> None:
         """Show current chat context information."""
@@ -1585,6 +1888,65 @@ Provide your synthesized response in JSON format:
                 break
             except Exception as e:
                 print(f"❌ Error: {e}")
+                
+    def generate_nice_message(self, user_question: str, model: str = "gpt-5") -> str:
+        """
+        Generate a nice, friendly message using the AI model.
+        
+        Args:
+            user_question: The user's question or context
+            model: Model to use for generation
+            
+        Returns:
+            A nice, friendly response message
+        """
+        # TODO: Add your prompt here
+        prompt = f"""You are an AI assistant in a PDF chat application that provides encouraging feedback to users.
+
+        CONTEXT:
+        - Current user: Kris
+        - Application: PDF document Q&A chat interface
+        - Your role: Generate thoughtful, genuine compliments about the user's questions
+
+        TASK:
+        Analyze the question below and provide a brief, authentic compliment that recognizes one of these aspects:
+        - Intellectual curiosity or depth of inquiry
+        - Critical thinking or analytical approach
+        - Specificity and clarity of the question
+        - Creative or unique perspective
+        - Practical application of the content
+
+        Keep your response:
+        - Genuine and specific (avoid generic praise)
+        - 1-2 sentences maximum
+        - Focused on the question's quality, not just effort
+        - Professional yet warm in tone
+
+        USER'S QUESTION:
+        "{user_question}"
+
+        COMPLIMENT:"""
+
+        try:
+            # Use the chat completion method 
+            messages = [{"role": "user", "content": prompt}]
+            response = self._make_chat_completion(model, messages, 1000)
+            
+            # For non-JSON responses, return directly
+            if model not in ["gpt-5", "gpt-4o"]:
+                return response
+            else:
+                # Try to parse JSON response, fallback to raw if needed
+                try:
+                    import json
+                    response_json = json.loads(response)
+                    return response_json.get("message", response)
+                except json.JSONDecodeError:
+                    return response
+                    
+        except Exception as e:
+            print(f"❌ Error generating nice message: {e}")
+            return "Thanks for using the PDF chat system!"
 
 
 def main():

@@ -336,6 +336,47 @@ async def chat_endpoint(chat_request: ChatMessage):
         print(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/chat-history/{collection_name}")
+async def get_chat_history(collection_name: str):
+    """Get chat history for a specific collection."""
+    try:
+        # Create a temporary session just to access the history methods
+        temp_session = PDFChatSession(
+            collection_name=collection_name,
+            vector_store_dir=str(CHROMA_DB_DIR),
+            enhanced_mode=False
+        )
+        
+        collection_messages = temp_session.get_chat_history_for_collection()
+        return {"messages": collection_messages}
+        
+    except Exception as e:
+        print(f"Error loading chat history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/clear-chat/{collection_name}")
+async def clear_chat_history(collection_name: str):
+    """Mark chat history as cleared for a specific collection."""
+    try:
+        # Create a temporary session just to access the history methods
+        temp_session = PDFChatSession(
+            collection_name=collection_name,
+            vector_store_dir=str(CHROMA_DB_DIR),
+            enhanced_mode=False
+        )
+        
+        cleared_count = temp_session.clear_chat_history_for_collection()
+        
+        return {
+            "success": True,
+            "message": f"Chat history cleared for collection '{collection_name}'",
+            "messages_cleared": cleared_count
+        }
+        
+    except Exception as e:
+        print(f"Error clearing chat history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/chunks/{collection_name}/{chunk_id}")
 async def get_chunk_content(collection_name: str, chunk_id: str):
     """Get chunk content by chunk ID for highlighting"""
