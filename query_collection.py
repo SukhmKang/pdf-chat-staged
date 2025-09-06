@@ -853,9 +853,11 @@ Use "entire pdf" for documents where the query is too general or doesn't clearly
         }
     
     def query_by_toc_section(self, query: str, toc_sections: List[str], pdf_filenames: Optional[List[str]] = None,
-                            n_results: int = 10, chunk_type: str = "child", use_hyde: bool = None) -> Dict[str, Any]:
+                            n_results: int = 10, chunk_type: str = "child", use_hyde: bool = None, 
+                            max_context_tokens: int = 8000) -> Dict[str, Any]:
         """
         Query chunks that belong to specific table of contents sections.
+        For small section page ranges, returns full page text directly. For larger ranges, uses RAG.
         
         Args:
             query: Search query text
@@ -864,10 +866,19 @@ Use "entire pdf" for documents where the query is too general or doesn't clearly
             n_results: Number of results to return
             chunk_type: Type of chunks to search ("child" or "parent")
             use_hyde: Whether to use HyDE for this query (overrides global setting)
+            max_context_tokens: Maximum tokens for context window
             
         Returns:
             Query results with metadata
         """
+        # Try to get full pages for small TOC sections if chunk_type is parent
+        if chunk_type == "parent":
+            full_pages_result = self._try_get_full_pages_for_toc_sections(
+                toc_sections, pdf_filenames, max_context_tokens
+            )
+            if full_pages_result:
+                return full_pages_result
+        
         # Determine if HyDE should be used for this query
         should_use_hyde = use_hyde if use_hyde is not None else self.enable_hyde
         
@@ -1122,7 +1133,7 @@ Use "entire pdf" for documents where the query is too general or doesn't clearly
         
     def query_by_page_range(self, query: str, pdf_filename: str, start_page: int, end_page: int,
                            n_results: int = 10, chunk_type: str = "child", use_hyde: bool = None, 
-                           max_context_tokens: int = 8000) -> Dict[str, Any]:
+                           max_context_tokens: int = 6000) -> Dict[str, Any]:
         """
         Query chunks within a specific page range of a PDF.
         For small ranges, returns full page text directly. For larger ranges, uses RAG.
@@ -1312,6 +1323,148 @@ Use "entire pdf" for documents where the query is too general or doesn't clearly
         except Exception as e:
             print(f"Error retrieving full page text: {e}")
             
+        return None
+    
+    def _try_get_full_pages_for_toc_sections(self, toc_sections: List[str], pdf_filenames: Optional[List[str]] = None,
+                                           max_context_tokens: int = 6000) -> Optional[Dict[str, Any]]:
+        """
+        Try to retrieve full page text for TOC sections using actual section boundaries.
+        
+        Args:
+            toc_sections: List of TOC section titles
+            pdf_filenames: Optional list of PDF filenames to restrict search
+            max_context_tokens: Maximum context tokens allowed
+            
+        Returns:
+            Full page results if successful and within token limit, None otherwise
+        """
+        try:
+            # Get TOC information for all sections
+            all_toc_info = self.get_toc_sections()
+            
+            # Filter by PDF filenames if specified
+            if pdf_filenames:
+                filtered_toc = {pdf: sections for pdf, sections in all_toc_info.items() 
+                               if pdf in pdf_filenames}
+            else:
+                filtered_toc = all_toc_info
+            
+            # Find actual page ranges for the requested TOC sections
+            section_ranges = {}
+            
+            for pdf_filename, sections in filtered_toc.items():
+                # Find matched sections and group by start page
+                matched_sections_by_page = {}
+                for section in sections:
+                    if section["title"] in toc_sections:
+                        start_page = section["page"]
+                        if start_page not in matched_sections_by_page:
+                            matched_sections_by_page[start_page] = []
+                        matched_sections_by_page[start_page].append(section["title"])
+                
+                if not matched_sections_by_page:
+                    continue
+                
+                # Convert grouped sections into page ranges
+                page_ranges = []
+                sorted_pages = sorted(matched_sections_by_page.keys())
+                
+                for i, start_page in enumerate(sorted_pages):
+                    # Find next different page in TOC (not just next requested section)
+                    end_page = None
+                    for section in sections:
+                        if section["page"] > start_page:
+                            end_page = section["page"] - 1
+                            break
+                    
+                    if end_page is None:
+                        # Last section - use conservative estimate
+                        end_page = start_page + 10
+                    
+                    page_ranges.append((start_page, end_page))
+                
+                if page_ranges:
+                    section_ranges[pdf_filename] = page_ranges
+            
+            if not section_ranges:
+                return None
+            
+            # Calculate total pages across all sections
+            total_pages = 0
+            pdf_ranges = {}
+            
+            for pdf_filename, sections in section_ranges.items():
+                # Merge overlapping or adjacent sections
+                merged_ranges = []
+                for start_page, end_page in sorted(sections):
+                    if merged_ranges and start_page <= merged_ranges[-1][1] + 1:
+                        # Merge with previous range
+                        merged_ranges[-1] = (merged_ranges[-1][0], max(merged_ranges[-1][1], end_page))
+                    else:
+                        merged_ranges.append((start_page, end_page))
+                
+                # Calculate total pages for this PDF
+                pdf_page_count = sum(end - start + 1 for start, end in merged_ranges)
+                total_pages += pdf_page_count
+                pdf_ranges[pdf_filename] = merged_ranges
+            
+            # Only proceed if total pages is reasonable (max 15 pages)
+            if total_pages > 10:
+                print(f"TOC sections too large ({total_pages} pages), falling back to RAG")
+                return None
+                
+            # Estimate tokens
+            estimated_tokens = total_pages * 750
+            if estimated_tokens > max_context_tokens:
+                print(f"TOC sections exceed token limit ({estimated_tokens} tokens), falling back to RAG")
+                return None
+            
+            print(f"🔄 Retrieving full pages for TOC sections ({total_pages} pages, ~{estimated_tokens} tokens)")
+            
+            # Get full pages for each PDF range and preserve section information
+            all_results = []
+            total_found = 0
+            
+            for pdf_filename, ranges in pdf_ranges.items():
+                # Get the original section mapping to preserve section names
+                sections = filtered_toc[pdf_filename]
+                
+                for start_page, end_page in ranges:
+                    # Find which sections start in this page range
+                    sections_in_range = []
+                    for section in sections:
+                        if start_page <= section["page"] <= end_page and section["title"] in toc_sections:
+                            sections_in_range.append(section["title"])
+                    
+                    pages_result = self._try_get_full_pages_from_files(
+                        pdf_filename, start_page, end_page, max_context_tokens
+                    )
+                    if pages_result:
+                        # Update each result's metadata to include the TOC section info
+                        for result in pages_result["results"]:
+                            if sections_in_range:
+                                # Use the first section name, or join multiple if there are many
+                                section_name = sections_in_range[0] if len(sections_in_range) == 1 else f"{sections_in_range[0]} (+{len(sections_in_range)-1} more)"
+                                result["metadata"]["section_title"] = section_name  # Use section_title for citation compatibility
+                        
+                        all_results.extend(pages_result["results"])
+                        total_found += pages_result["total_found"]
+                        section_names = ", ".join(sections_in_range) if sections_in_range else "No sections"
+                        print(f"✓ Retrieved pages {start_page}-{end_page} from {pdf_filename} ({section_names})")
+                    else:
+                        print(f"✗ Could not retrieve pages {start_page}-{end_page} from {pdf_filename}")
+                        return None
+            
+            if all_results:
+                return {
+                    "results": all_results,
+                    "total_found": total_found,
+                    "query_method": "full_pages_toc_sections"
+                }
+                
+        except Exception as e:
+            print(f"Error trying to get full pages for TOC sections: {e}")
+        
         return None
     
     def get_pdf_overview(self, pdf_filename: str, n_chunks: int = 5) -> Dict[str, Any]:

@@ -1297,6 +1297,8 @@ The table of contents may span multiple pages. Look for:
 
 Skip any TOC sections with Roman numeral page numbers (i, ii, iii, iv, v, etc.). Start from the first section using Arabic numerals (1, 2, 3, etc.).
 
+If the page(s) are not a table of contents, return an empty list for entries, even if there are section headings visible.
+
 Return a JSON object with this structure:
 {
   "is_toc": true/false,

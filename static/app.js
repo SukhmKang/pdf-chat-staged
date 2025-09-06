@@ -1302,8 +1302,11 @@ NY
             descColor = 'text-purple-600';
         }
         
-        const selectedModel = this.modelSelect ? this.modelSelect.value : 'gpt-5';
-        const modelDisplay = selectedModel === 'gpt-5' ? 'GPT-5' : 'GPT-4';
+        const selectedModel = this.modelSelect ? this.modelSelect.value : 'claude';
+        const modelDisplay = (selectedModel === 'gpt-5') ? 'GPT-5' : 
+                            (selectedModel === 'gpt-4o') ? 'GPT-4 Omni' : 
+                            (selectedModel === 'claude-3-5-sonnet-20241022') ? 'Claude 3.5 Sonnet (New)' : 
+                            'Claude Sonnet';
         
         this.chatModeIndicator.className = `${bgColor} p-3 rounded-lg`;
         this.chatModeIndicator.innerHTML = `
@@ -1343,7 +1346,7 @@ NY
                     toc_sections: this.currentTOCSections.length > 0 ? this.currentTOCSections : null,
                     toc_section: this.currentTOCSections.length === 1 ? this.currentTOCSections[0] : null, // For backward compatibility
                     page_range: this.currentPageRange,
-                    model: this.modelSelect ? this.modelSelect.value : 'gpt-5',
+                    model: this.modelSelect ? this.modelSelect.value : 'claude',
                     verbosity: this.currentVerbosity,
                     enhanced: false
                 })

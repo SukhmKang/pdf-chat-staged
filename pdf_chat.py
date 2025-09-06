@@ -1139,7 +1139,7 @@ Provide your synthesized response in JSON format:
         Make a chat completion request with model-specific parameters.
         
         Args:
-            model: Model name ("gpt-5" or "gpt-4o" or "claude")
+            model: Model name ("gpt-5", "gpt-4o", "claude", or "claude-3-5-sonnet-20241022")
             messages: List of message dictionaries
             max_tokens: Maximum tokens for response
             
@@ -1169,10 +1169,14 @@ Provide your synthesized response in JSON format:
         else:
             max_tokens = 10000
             # Claude doesn't support response_format, so we need to handle JSON parsing manually
+            
+            # Determine which Claude model to use
+            claude_model = "claude-3-5-sonnet-20241022" if model == "claude-3-5-sonnet-20241022" else "claude-sonnet-4-20250514"
+            
             for attempt in range(3):  # Try up to 3 times
                 try:
                     response_text = self.anthropic_client.messages.create(
-                        model="claude-sonnet-4-20250514",
+                        model=claude_model,
                         max_tokens=max_tokens,
                         messages=messages
                     ).content[0].text
@@ -1222,7 +1226,7 @@ Provide your synthesized response in JSON format:
         Make a text completion request without JSON formatting.
         
         Args:
-            model: Model name ("gpt-5" or "gpt-4o" or "claude")
+            model: Model name ("gpt-5", "gpt-4o", "claude", or "claude-3-5-sonnet-20241022")
             messages: List of message dictionaries
             max_tokens: Maximum tokens for response
             
@@ -1247,8 +1251,11 @@ Provide your synthesized response in JSON format:
         else:
             # Claude - simple text completion
             max_tokens = 10000
+            # Determine which Claude model to use
+            claude_model = "claude-3-5-sonnet-20241022" if model == "claude-3-5-sonnet-20241022" else "claude-sonnet-4-20250514"
+            
             response_text = self.anthropic_client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=claude_model,
                 max_tokens=max_tokens,
                 messages=messages
             ).content[0].text
