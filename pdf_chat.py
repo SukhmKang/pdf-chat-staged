@@ -1171,7 +1171,7 @@ Provide your synthesized response in JSON format:
             # Claude doesn't support response_format, so we need to handle JSON parsing manually
             
             # Determine which Claude model to use
-            claude_model = "claude-3-5-sonnet-20241022" if model == "claude-3-5-sonnet-20241022" else "claude-sonnet-4-20250514"
+            claude_model = "claude-3-7-sonnet-latest" if model == "claude-3-5-sonnet-20241022" else "claude-sonnet-4-20250514"
             
             for attempt in range(3):  # Try up to 3 times
                 try:

@@ -1305,7 +1305,7 @@ NY
         const selectedModel = this.modelSelect ? this.modelSelect.value : 'claude';
         const modelDisplay = (selectedModel === 'gpt-5') ? 'GPT-5' : 
                             (selectedModel === 'gpt-4o') ? 'GPT-4 Omni' : 
-                            (selectedModel === 'claude-3-5-sonnet-20241022') ? 'Claude 3.5 Sonnet (New)' : 
+                            (selectedModel === 'claude-3-5-sonnet-20241022') ? 'Claude Sonnet 3.5' : 
                             'Claude Sonnet';
         
         this.chatModeIndicator.className = `${bgColor} p-3 rounded-lg`;

@@ -336,67 +336,6 @@ async def chat_endpoint(chat_request: ChatMessage):
         print(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/chat-stream")
-async def chat_stream_endpoint(chat_request: ChatMessage):
-    """Streaming chat endpoint - shows dual answer generation + synthesis in real-time"""
-    from fastapi.responses import StreamingResponse
-    import json
-    
-    # Feature flag - easy to disable
-    ENABLE_STREAMING = True
-    if not ENABLE_STREAMING:
-        # Fallback to regular chat endpoint
-        return await chat_endpoint(chat_request)
-    
-    async def generate_stream():
-        try:
-            # Get or create chat session
-            session_key = f"{chat_request.collection}_{chat_request.pdf_filename or 'all'}"
-            if session_key in chat_sessions:
-                session = chat_sessions[session_key]
-            else:
-                session = PDFChatSession(
-                    collection_name=chat_request.collection,
-                    vector_store_dir=str(CHROMA_DB_DIR),
-                    enhanced_mode=False
-                )
-                chat_sessions[session_key] = session
-            
-            # Set the chat mode based on request parameters
-            if chat_request.toc_sections or chat_request.toc_section:
-                # Handle both new list format and old single format
-                sections = chat_request.toc_sections or ([chat_request.toc_section] if chat_request.toc_section else [])
-                session.set_chat_mode("toc_section", pdf_filename=chat_request.pdf_filename, toc_sections=sections)
-            elif chat_request.page_range:
-                start_page, end_page = map(int, chat_request.page_range.split('-'))
-                session.set_chat_mode("page_range", pdf_filename=chat_request.pdf_filename, page_range=(start_page, end_page))
-            elif chat_request.pdf_filename:
-                session.set_chat_mode("pdf", pdf_filename=chat_request.pdf_filename)
-            else:
-                session.set_chat_mode("collection")
-            
-            # Stream the dual answer generation + synthesis
-            async for chunk in session.ask_question_streaming(
-                chat_request.message, 
-                model=chat_request.model or "gpt-5", 
-                verbosity=chat_request.verbosity or "medium"
-            ):
-                yield f"data: {json.dumps(chunk)}\n\n"
-                
-        except Exception as e:
-            import traceback
-            error_chunk = {
-                "type": "error", 
-                "content": str(e),
-                "traceback": traceback.format_exc()
-            }
-            yield f"data: {json.dumps(error_chunk)}\n\n"
-    
-    return StreamingResponse(
-        generate_stream(), 
-        media_type="text/stream-event",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
-    )
 
 @app.get("/api/chat-history/{collection_name}")
 async def get_chat_history(collection_name: str):
