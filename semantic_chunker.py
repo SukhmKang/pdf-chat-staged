@@ -737,7 +737,7 @@ class SemanticChunker:
             caption = metadata.get("caption", "")
             
             # Prepare the prompt for GPT-4 Vision
-            system_prompt = """You are analyzing a figure from a document. Provide a transcription of any text in the figure and a summary/description of any images within the figure. Keep the summaries of the images within 3-4 sentences."""
+            system_prompt = """You are analyzing a figure from a document. Provide a transcription of any text in the figure and a summary/description of any images within the figure. Keep the summaries of any images in the figure within 3-4 sentences."""
             
             user_prompt = "Analyze this figure."
             if caption:

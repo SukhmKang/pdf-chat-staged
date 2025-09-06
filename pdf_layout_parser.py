@@ -1256,28 +1256,40 @@ If no major sections are found, have "sections" map to an empty array []."""
         return sum(continuation_indicators) >= 2
     
     def _analyze_toc_with_gpt(self, potential_toc_pages: List) -> Optional[TableOfContents]:
-        """Use GPT to analyze potential TOC pages and extract entries with multi-page support."""
+        """Use GPT with vision to analyze potential TOC pages and extract entries with multi-page support."""
         try:
-            # Combine text from all potential TOC pages
+            # Combine text and images from all potential TOC pages
             combined_text = ""
             detected_pages = []
+            page_images = []
             
             for page_num, page_text, page_layout in potential_toc_pages:
                 detected_pages.append(page_num)
                 combined_text += f"\n--- Page {page_num} ---\n{page_text}\n"
+                
+                # Render the page as an image for visual analysis
+                try:
+                    page = self.doc[page_num - 1]  # Convert to 0-indexed
+                    page_image = self._render_page_image(page)
+                    if page_image:
+                        page_images.append((page_num, page_image))
+                except Exception as e:
+                    print(f"Warning: Could not render page {page_num} as image: {e}")
             
             # Limit text length for GPT
-            if len(combined_text) > 12000:  # Increased limit for multi-page TOCs
-                combined_text = combined_text[:12000] + "..."
+            if len(combined_text) > 8000:  # Reduced since we're also sending images
+                combined_text = combined_text[:8000] + "..."
             
-            system_prompt = """You are analyzing text that may contain a table of contents spanning multiple pages. Your task is to:
-1. Determine if this text contains a table of contents (confidence: 0.0-1.0)
+            system_prompt = """You are analyzing text and images that may contain a table of contents spanning multiple pages. Your task is to:
+1. Determine if this content contains a table of contents (confidence: 0.0-1.0)
 2. If it does, extract ALL TOC entries from ALL pages with:
    - Title (the section/chapter name)
    - Page number (if present)
    - Level (0 = main chapter, 1 = subsection, 2 = sub-subsection, etc.)
 
-IMPORTANT: The table of contents may span multiple pages. Look for:
+IMPORTANT: You have both text and visual images of the pages. Use the visual images to verify page numbers from the text as OCR can misread numbers.
+
+The table of contents may span multiple pages. Look for:
 - Main sections (Introduction, Summary, etc.) 
 - Appendices (Appendix 1, Appendix 2, etc.)
 - References, Notes, Bibliography
@@ -1308,13 +1320,30 @@ Return a JSON object with this structure:
   ]
 }"""
 
-            user_prompt = f"Analyze this multi-page text and extract ALL table of contents information. Pay special attention to appendices and continuation entries:\n\n{combined_text}"
+            # Build multimodal user message with text and images
+            user_message_content = [
+                {
+                    "type": "text",
+                    "text": f"Analyze this multi-page table of contents and extract ALL entries. Use the IMAGES to verify correct page numbers (OCR often misreads '1' as 'll'):\n\nText content:\n{combined_text}"
+                }
+            ]
+            
+            # Add images to the message
+            for page_num, page_image in page_images:
+                user_message_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{page_image}"
+                    }
+                })
+            
+            print(f"Sending TOC analysis with {len(page_images)} page images")
             
             response = self.openai_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_message_content}
                 ],
                 response_format={"type": "json_object"},
                 max_tokens=3000,  # Increased for more entries
