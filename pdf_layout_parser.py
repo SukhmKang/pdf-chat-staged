@@ -1218,6 +1218,8 @@ If no major sections are found, have "sections" map to an empty array []."""
     def _is_potential_toc_page(self, page_text: str) -> bool:
         """Quick heuristic check if a page might contain a table of contents."""
         page_text = page_text.replace(" ", "").replace("\t", "")
+        if "contents" in page_text.lower():
+            return True
         toc_indicators = [
             "table of contents" in page_text.lower(),
             "contents" in page_text.lower(),
