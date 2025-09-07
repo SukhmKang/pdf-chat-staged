@@ -368,6 +368,16 @@ async def clear_chat_history(collection_name: str):
         
         cleared_count = temp_session.clear_chat_history_for_collection()
         
+        # IMPORTANT: Invalidate all cached sessions for this collection to force reload of conversation history
+        sessions_to_remove = []
+        for session_key in chat_sessions:
+            if session_key.startswith(f"{collection_name}_"):
+                sessions_to_remove.append(session_key)
+        
+        for session_key in sessions_to_remove:
+            del chat_sessions[session_key]
+            print(f"🗑️ Invalidated cached session: {session_key}")
+        
         return {
             "success": True,
             "message": f"Chat history cleared for collection '{collection_name}'",

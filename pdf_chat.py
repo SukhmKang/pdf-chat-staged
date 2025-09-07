@@ -587,6 +587,7 @@ Instructions:
 2. Include citations for all source references using this exact format: <citation pdf_name="file.pdf" page_number="123" chunk_id="id" cited_text="first 5-7 words...">
 3. Citation tags are INVISIBLE to users - put all visible text OUTSIDE the tags
 4. Say clearly if the content doesn't address the question
+5. Your answer MUST include citations
 
 Citation Examples:
 ✓ GOOD: The author argues that life is absurd <citation pdf_name="nagel.pdf" page_number="4" chunk_id="abc123" cited_text="Nothing we do now...">.
@@ -1006,6 +1007,7 @@ User Question: {question}"""
             }
             
         except Exception as e:
+            print("Failed to generate answer", e)
             return {
                 "response": f"Error generating {approach_name} response: {e}",
                 "chunks": retrieved_chunks,
@@ -1325,6 +1327,8 @@ Provide your synthesized response in JSON format:
         """Build conversation context within token budget (enhanced mode only)."""
         if not self.enhanced_mode or not self.conversation_history:
             return "This is the start of our conversation."
+    
+        print(self.conversation_history)
         
         relevant_history = [
             turn for turn in self.conversation_history
