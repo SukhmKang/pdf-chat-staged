@@ -1480,7 +1480,7 @@ Provide your synthesized response in JSON format:
         print("total tokens of conversation history", total_tokens)
         
         # Token threshold for triggering compaction (roughly 8000 tokens)
-        TOKEN_THRESHOLD = 8000
+        TOKEN_THRESHOLD = 5000
         
         if total_tokens <= TOKEN_THRESHOLD:
             return collection_history
