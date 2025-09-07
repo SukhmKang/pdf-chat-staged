@@ -59,6 +59,7 @@ class ChatMessage(BaseModel):
     page_range: Optional[str] = None
     model: Optional[str] = "gpt-5"
     verbosity: Optional[str] = "medium"
+    synthesis: Optional[bool] = False
 
 class ChatResponse(BaseModel):
     response: str
@@ -309,7 +310,7 @@ async def chat_endpoint(chat_request: ChatMessage):
             session.set_chat_mode("collection")
         
         # Process the chat message
-        response_text = session.ask_question(chat_request.message, model=chat_request.model, verbosity=chat_request.verbosity)
+        response_text = session.ask_question(chat_request.message, model=chat_request.model, verbosity=chat_request.verbosity, synthesis=chat_request.synthesis)
         
         # Get context info for the response
         context_info = {

@@ -1264,7 +1264,7 @@ Provide your synthesized response in JSON format:
             return response_text.strip()
 
     
-    def ask_question(self, question: str, model: str = "gpt-5", verbosity: str = "medium") -> str:
+    def ask_question(self, question: str, model: str = "gpt-5", verbosity: str = "medium", synthesis: bool = True) -> str:
         """
         Ask a question and get an AI response using dual-answer synthesis approach.
         Generates two answers (with and without auto-TOC) in parallel, then synthesizes them.
@@ -1277,6 +1277,33 @@ Provide your synthesized response in JSON format:
             AI assistant's synthesized response
         """
         try:
+            if not synthesis:
+                # Single LLM mode - use specific approach based on mode
+                corrected_question = self._fix_typos(question)
+                n_results = 8  # Standard mode default
+                current_mode = self.current_context["mode"]
+                
+                if current_mode in ["toc_section", "page_range"]:
+                    # Use parent chunks (consistent with _generate_dual_answers_parallel)
+                    print(f"🎯 Single LLM mode: Using parent chunks for {current_mode} mode")
+                    chunks = self._retrieve_chunks_by_type(corrected_question, n_results, chunk_type="parent")
+                    answer_data = self._generate_single_answer_standard(corrected_question, chunks, model, "PARENT-CHUNKS")
+                else:
+                    # Use auto-TOC routing (consistent with _generate_dual_answers_parallel)
+                    print(f"🎯 Single LLM mode: Using auto-TOC routing for {current_mode} mode")
+                    chunks = self._retrieve_relevant_chunks_with_setting(corrected_question, n_results, use_auto_toc=True)
+                    answer_data = self._generate_single_answer_standard(corrected_question, chunks, model, "AUTO-TOC")
+                
+                # Store sources for response
+                self.last_sources = answer_data.get('chunks', [])
+                
+                # Save to history
+                self._add_to_history(question, answer_data['response'], self.current_context, 
+                                   answer_data['chunks'], answer_data['context_stats'])
+                
+                return answer_data['response']
+            
+            # Original synthesis mode logic
             # Generate dual answers in parallel
             toc_answer_data, non_toc_answer_data = self._generate_dual_answers_parallel(question, model)
             

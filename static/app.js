@@ -56,6 +56,9 @@ class PDFChatApp {
         // Track verbosity setting
         this.currentVerbosity = 'medium';  // 'low', 'medium', 'high'
         
+        // Track synthesis mode (checked by default)
+        this.synthesisEnabled = true;
+        
         // PDF viewer elements
         this.pdfTitle = document.getElementById('pdfTitle');
         this.pdfContainer = document.getElementById('pdfContainer');
@@ -73,6 +76,7 @@ class PDFChatApp {
         this.sendButton = document.getElementById('sendButton');
         this.clearChatBtn = document.getElementById('clearChat');
         this.verbositySelector = document.getElementById('verbositySelector');
+        this.synthesisToggle = document.getElementById('synthesisToggle');
         this.typingIndicator = document.getElementById('typingIndicator');
         
         // Check for missing elements
@@ -204,6 +208,14 @@ class PDFChatApp {
             this.verbositySelector.addEventListener('change', () => {
                 this.currentVerbosity = this.verbositySelector.value;
                 console.log('Verbosity changed to:', this.currentVerbosity);
+            });
+        }
+        
+        // Synthesis toggle
+        if (this.synthesisToggle) {
+            this.synthesisToggle.addEventListener('change', () => {
+                this.synthesisEnabled = this.synthesisToggle.checked;
+                console.log('Synthesis mode changed to:', this.synthesisEnabled);
             });
         }
         
@@ -1348,6 +1360,7 @@ NY
                     page_range: this.currentPageRange,
                     model: this.modelSelect ? this.modelSelect.value : 'claude',
                     verbosity: this.currentVerbosity,
+                    synthesis: this.synthesisEnabled,
                     enhanced: false
                 })
             });
