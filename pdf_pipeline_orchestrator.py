@@ -58,14 +58,43 @@ Usage:
 import json
 import argparse
 import traceback
+import sqlite3
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 # Import pipeline components
 from pdf_layout_parser import PDFLayoutParser
 from reading_order_processor import ReadingOrderProcessor
 from semantic_chunker import SemanticChunker
 from vector_store import DocumentVectorStore
+
+
+def get_collections_from_db(vector_store_dir: str = "./chroma_db") -> List[str]:
+    """
+    Get list of collection names from Chroma database.
+
+    Args:
+        vector_store_dir: Path to the chroma database directory
+
+    Returns:
+        List of collection names
+    """
+    db_path = Path(vector_store_dir) / "chroma.sqlite3"
+
+    if not db_path.exists():
+        print(f"⚠️  Database not found at {db_path}, returning empty collection list")
+        return []
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM collections;")
+        collections = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return collections
+    except Exception as e:
+        print(f"⚠️  Error reading collections from database: {e}")
+        return []
 
 
 class PDFPipelineOrchestrator:
@@ -239,9 +268,9 @@ class PDFPipelineOrchestrator:
             # Get all collections and check for orphaned PDFs
             try:
                 from vector_store import DocumentVectorStore
-                
-                # List of known collections (you might want to make this dynamic)
-                known_collections = ["philosophy", "rag", "alliances", "china", "default"]
+
+                # Get collections dynamically from Chroma database
+                known_collections = get_collections_from_db(vector_store_dir)
                 
                 for collection_name in known_collections:
                     try:
